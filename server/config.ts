@@ -5,15 +5,26 @@ import path from 'node:path';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = path.join(ROOT, '.env');
 
+export interface ParleyConfig {
+  googleApiKey: string;
+  geminiLiveModel: string;
+  geminiLiveModelFallbacks: string[];
+  geminiTextModel: string;
+  geminiTextModelFallbacks: string[];
+  tutorVoice: string;
+  port: number;
+  accessTokens: string[];
+  dataDir: string;
+  maxSessions: number;
+  root: string;
+}
+
 /**
  * Minimal .env parser: KEY=VALUE per line, '#' comments, blank lines ignored.
  * No quoting/escaping support — matches the simple values this project needs.
- * @param {string} text
- * @returns {Record<string, string>}
  */
-export function parseEnv(text) {
-  /** @type {Record<string, string>} */
-  const out = {};
+export function parseEnv(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
@@ -32,8 +43,7 @@ export function parseEnv(text) {
   return out;
 }
 
-/** @returns {Record<string, string>} */
-function loadEnvFile() {
+function loadEnvFile(): Record<string, string> {
   try {
     return parseEnv(readFileSync(ENV_PATH, 'utf8'));
   } catch {
@@ -43,7 +53,7 @@ function loadEnvFile() {
 
 // Comma-separated list, trimmed and empty-entries-filtered, falling back to
 // `defaults` when the env var is unset/empty.
-function parseModelList(value, defaults) {
+function parseModelList(value: string | undefined, defaults: string[]): string[] {
   if (!value) return defaults;
   const parsed = value
     .split(',')
@@ -52,8 +62,7 @@ function parseModelList(value, defaults) {
   return parsed.length ? parsed : defaults;
 }
 
-/** @param {Record<string, string>} [env] */
-export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
+export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ...filterProcessEnv() }): ParleyConfig {
   const googleApiKey = env.GOOGLE_API_KEY || '';
   if (!googleApiKey) {
     throw new Error('GOOGLE_API_KEY is required (set it in .env)');
@@ -82,8 +91,7 @@ export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
 
 // process.env only overrides file values for keys that are actually set,
 // so an empty shell env doesn't blank out .env values.
-/** @returns {Record<string, string>} */
-function filterProcessEnv() {
+function filterProcessEnv(): Record<string, string> {
   const keys = [
     'GOOGLE_API_KEY',
     'GEMINI_LIVE_MODEL',
@@ -96,12 +104,12 @@ function filterProcessEnv() {
     'DATA_DIR',
     'MAX_SESSIONS',
   ];
-  /** @type {Record<string, string>} */
-  const out = {};
+  const out: Record<string, string> = {};
   for (const key of keys) {
-    if (process.env[key] !== undefined) out[key] = process.env[key];
+    const value = process.env[key];
+    if (value !== undefined) out[key] = value;
   }
   return out;
 }
 
-export const config = buildConfig();
+export const config: ParleyConfig = buildConfig();
