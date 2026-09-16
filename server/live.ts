@@ -1,6 +1,16 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket as WsWebSocket } from 'ws';
 import { buildSystemPrompt } from './tutor.js';
+import type {
+  ClientMessage,
+  GeminiAudioUpstreamFrame,
+  GeminiServerContent,
+  GeminiServerFrame,
+  GeminiSetupFrame,
+  GeminiTextUpstreamFrame,
+  GeminiUpstreamFrame,
+  LiveEventMessage,
+} from './protocol.js';
 
 // Node >= 22 ships a global WebSocket; Node 20 does not. The production unit
 // runs on the system node (/usr/bin/node), which may be older than the shell's,
@@ -8,7 +18,13 @@ import { buildSystemPrompt } from './tutor.js';
 // "this.WebSocketImpl is not a constructor". Resolved as a constructor
 // default (evaluated per-call, not at module load) so tests can flip
 // globalThis.WebSocket and observe the fallback actually engage.
-export function resolveWebSocketImpl() {
+//
+// Returns `any` on purpose: the DOM/undici global WebSocket and the `ws`
+// package's WebSocket are two different, incompatible type declarations for
+// the same runtime shape, and this class genuinely runs with either one
+// depending on the Node version — forcing one's types onto the other would
+// be dishonest, not safer.
+export function resolveWebSocketImpl(): any {
   return globalThis.WebSocket ?? WsWebSocket;
 }
 
@@ -18,11 +34,11 @@ const UPSTREAM_BASE =
 const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
 
-export function upstreamUrl(apiKey) {
+export function upstreamUrl(apiKey: string): string {
   return `${UPSTREAM_BASE}?key=${apiKey}`;
 }
 
-export function buildSetupFrame({ model, voice }) {
+export function buildSetupFrame({ model, voice }: { model: string; voice: string }): GeminiSetupFrame {
   return {
     setup: {
       model: `models/${model}`,
@@ -45,11 +61,11 @@ export function buildSetupFrame({ model, voice }) {
   };
 }
 
-export function audioUpstreamFrame(base64Data) {
+export function audioUpstreamFrame(base64Data: string): GeminiAudioUpstreamFrame {
   return { realtimeInput: { audio: { data: base64Data, mimeType: 'audio/pcm;rate=16000' } } };
 }
 
-export function textUpstreamFrame(text) {
+export function textUpstreamFrame(text: string): GeminiTextUpstreamFrame {
   return { clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } };
 }
 
@@ -57,7 +73,7 @@ export function textUpstreamFrame(text) {
 // tests. `interrupt` has no upstream wire shape: automatic activity detection
 // is always on, so interruption is handled locally (flush turn state, tell
 // the client to flush playback) rather than by sending anything upstream.
-export function toUpstreamFrame(message) {
+export function toUpstreamFrame(message: ClientMessage): GeminiUpstreamFrame | null {
   switch (message.type) {
     case 'audio':
       return audioUpstreamFrame(message.data);
@@ -71,12 +87,24 @@ export function toUpstreamFrame(message) {
   }
 }
 
+export interface HalfDuplexGateOptions {
+  tailGuardMs?: number;
+  enabled?: boolean;
+  now?: () => number;
+}
+
 // Pure, timestamp-based half-duplex gate: while the assistant's audio is
 // playing, and for a short tail guard after it ends, incoming mic frames are
 // dropped server-side. Timestamp-based (not setTimeout-based) so it is
 // trivially unit-testable with a fake clock.
 export class HalfDuplexGate {
-  constructor({ tailGuardMs = TAIL_GUARD_MS, enabled = true, now = () => Date.now() } = {}) {
+  tailGuardMs: number;
+  enabled: boolean;
+  private _now: () => number;
+  private _speaking: boolean;
+  private _resumeAt: number;
+
+  constructor({ tailGuardMs = TAIL_GUARD_MS, enabled = true, now = () => Date.now() }: HalfDuplexGateOptions = {}) {
     this.tailGuardMs = tailGuardMs;
     this.enabled = enabled;
     this._now = now;
@@ -84,41 +112,86 @@ export class HalfDuplexGate {
     this._resumeAt = 0;
   }
 
-  setEnabled(enabled) {
+  setEnabled(enabled: boolean): void {
     this.enabled = enabled;
   }
 
-  onAssistantAudio() {
+  onAssistantAudio(): void {
     this._speaking = true;
     this._resumeAt = Infinity;
   }
 
-  onTurnComplete() {
+  onTurnComplete(): void {
     this._speaking = false;
     this._resumeAt = this._now() + this.tailGuardMs;
   }
 
-  onInterrupted() {
+  onInterrupted(): void {
     this._speaking = false;
     this._resumeAt = 0;
   }
 
-  isGated() {
+  isGated(): boolean {
     if (!this.enabled) return false;
     if (this._speaking) return true;
     return this._now() < this._resumeAt;
   }
 }
 
-function freshTurn() {
+interface Turn {
+  userText: string;
+  assistantText: string;
+  startedAt: number;
+  silent: boolean;
+}
+
+function freshTurn(): Turn {
   return { userText: '', assistantText: '', startedAt: Date.now(), silent: false };
+}
+
+export interface GeminiLiveSessionOptions {
+  apiKey: string;
+  model: string;
+  voice: string;
+  scenario?: string;
+  level?: string;
+  nativeLanguage?: string;
+  feedbackDetail?: string;
+  halfDuplex?: boolean;
+  webSocketImpl?: any;
+}
+
+export interface ReviewRequestPayload {
+  user: string;
+  assistant: string;
+  level: string;
 }
 
 // One upstream Live session per browser WebSocket connection. Emits 'client'
 // events shaped exactly like the documented server->client protocol, and
-// 'review-request' when a non-silent turn completes (index.js wires that to
-// server/review.js).
+// 'review-request' when a non-silent turn completes (index.ts wires that to
+// server/review.ts).
 export class GeminiLiveSession extends EventEmitter {
+  apiKey: string;
+  model: string;
+  voice: string;
+  scenario: string;
+  level: string;
+  nativeLanguage: string;
+  feedbackDetail: string;
+  WebSocketImpl: any;
+  gate: HalfDuplexGate;
+  ws: any;
+  closed: boolean;
+  reconnectAttempted: boolean;
+  turn: Turn;
+  private _thinkingTimer: NodeJS.Timeout | undefined;
+  private _resumeTimer: NodeJS.Timeout | undefined;
+  // Separate from gate._speaking (which starts pre-closed, see below) —
+  // tracks whether we've told the client we're in the 'speaking' state
+  // for the turn currently in flight.
+  private _speakingUi: boolean;
+
   constructor({
     apiKey,
     model,
@@ -129,7 +202,7 @@ export class GeminiLiveSession extends EventEmitter {
     feedbackDetail = 'every-turn',
     halfDuplex = true,
     webSocketImpl = resolveWebSocketImpl(),
-  }) {
+  }: GeminiLiveSessionOptions) {
     super();
     this.apiKey = apiKey;
     this.model = model;
@@ -151,36 +224,32 @@ export class GeminiLiveSession extends EventEmitter {
     this.closed = false;
     this.reconnectAttempted = false;
     this.turn = freshTurn();
-    this._thinkingTimer = null;
-    this._resumeTimer = null;
-    // Separate from gate._speaking (which starts pre-closed, see above) —
-    // tracks whether we've told the client we're in the 'speaking' state
-    // for the turn currently in flight.
+    this._thinkingTimer = undefined;
+    this._resumeTimer = undefined;
     this._speakingUi = false;
   }
 
-  setHalfDuplex(enabled) {
+  setHalfDuplex(enabled: boolean): void {
     this.gate.setEnabled(enabled);
   }
 
-  setScenario(scenario) {
+  setScenario(scenario: string): void {
     this.scenario = scenario;
   }
 
-  async start() {
+  async start(): Promise<void> {
     await this._connect();
   }
 
-  _connect() {
-    return new Promise((resolve, reject) => {
+  private _connect(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       let settled = false;
       // `this.WebSocketImpl` is either the DOM/undici global WebSocket or the
       // `ws` package's WebSocket depending on the Node runtime (see
       // resolveWebSocketImpl above) — their type declarations disagree on the
       // exact MessageEvent shape, so this is intentionally untyped rather
       // than forcing one implementation's types onto the other.
-      /** @type {any} */
-      const ws = new this.WebSocketImpl(upstreamUrl(this.apiKey));
+      const ws: any = new this.WebSocketImpl(upstreamUrl(this.apiKey));
       // The global WebSocket defaults binaryType to "blob"; Gemini sends JSON
       // over binary frames, so without this every message arrives as an
       // unreadable Blob and silently fails to parse.
@@ -191,8 +260,8 @@ export class GeminiLiveSession extends EventEmitter {
         ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice })));
       });
 
-      ws.addEventListener('message', (event) => {
-        let msg;
+      ws.addEventListener('message', (event: any) => {
+        let msg: GeminiServerFrame;
         try {
           const text = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8');
           msg = JSON.parse(text);
@@ -241,7 +310,7 @@ export class GeminiLiveSession extends EventEmitter {
     });
   }
 
-  _sendPersonaTurn() {
+  private _sendPersonaTurn(): void {
     const prompt = buildSystemPrompt({
       scenario: this.scenario,
       level: this.level,
@@ -252,46 +321,46 @@ export class GeminiLiveSession extends EventEmitter {
     this._sendUpstream(textUpstreamFrame(prompt));
   }
 
-  _sendUpstream(frame) {
+  private _sendUpstream(frame: GeminiUpstreamFrame): void {
     if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) return;
     this.ws.send(JSON.stringify(frame));
   }
 
-  _emitClient(message) {
+  private _emitClient(message: LiveEventMessage): void {
     this.emit('client', message);
   }
 
-  _clearTimers() {
+  private _clearTimers(): void {
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._resumeTimer);
-    this._thinkingTimer = null;
-    this._resumeTimer = null;
+    this._thinkingTimer = undefined;
+    this._resumeTimer = undefined;
   }
 
-  _armThinkingTimer() {
+  private _armThinkingTimer(): void {
     clearTimeout(this._thinkingTimer);
     this._thinkingTimer = setTimeout(() => {
       this._emitClient({ type: 'state', value: 'thinking' });
     }, THINKING_DELAY_MS);
   }
 
-  sendAudio(base64Data) {
+  sendAudio(base64Data: string): boolean {
     if (this.gate.isGated()) return false;
     this._armThinkingTimer();
     this._sendUpstream(audioUpstreamFrame(base64Data));
     return true;
   }
 
-  sendText(text) {
+  sendText(text: string): void {
     this._sendUpstream(textUpstreamFrame(text));
   }
 
-  say(text) {
+  say(text: string): void {
     this.turn.silent = true;
     this._sendUpstream(textUpstreamFrame(text));
   }
 
-  interrupt() {
+  interrupt(): void {
     this.gate.onInterrupted();
     this._clearTimers();
     this.turn = freshTurn();
@@ -300,7 +369,7 @@ export class GeminiLiveSession extends EventEmitter {
     this._emitClient({ type: 'state', value: 'listening' });
   }
 
-  stop() {
+  stop(): void {
     this.closed = true;
     this._clearTimers();
     if (this.ws) {
@@ -312,7 +381,7 @@ export class GeminiLiveSession extends EventEmitter {
     }
   }
 
-  _handleUpstreamMessage(msg) {
+  private _handleUpstreamMessage(msg: GeminiServerFrame): void {
     if (msg.serverContent) {
       this._handleServerContent(msg.serverContent);
     }
@@ -322,7 +391,7 @@ export class GeminiLiveSession extends EventEmitter {
     // sessionResumptionUpdate intentionally ignored.
   }
 
-  _handleServerContent(sc) {
+  private _handleServerContent(sc: GeminiServerContent): void {
     if (sc.interrupted) {
       this.interrupt();
       return;
@@ -359,7 +428,7 @@ export class GeminiLiveSession extends EventEmitter {
     }
   }
 
-  _onTurnComplete() {
+  private _onTurnComplete(): void {
     const { userText, assistantText, startedAt, silent } = this.turn;
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
@@ -371,7 +440,8 @@ export class GeminiLiveSession extends EventEmitter {
 
     if (!silent) {
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
-      this.emit('review-request', { user: userText, assistant: assistantText, level: this.level });
+      const payload: ReviewRequestPayload = { user: userText, assistant: assistantText, level: this.level };
+      this.emit('review-request', payload);
     }
 
     this.turn = freshTurn();
