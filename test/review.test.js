@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseReviewPayload, review } from '../server/review.js';
+import { parseReviewPayload, review, buildReviewPrompt } from '../server/review.js';
 
 test('parseReviewPayload parses a well-formed JSON payload', () => {
   const raw = JSON.stringify({
@@ -140,6 +140,88 @@ test('review() parses the model response text from the generateContent envelope'
   });
   assert.equal(result.score, 70);
   assert.equal(result.tip, 'Watch your vowel length.');
+});
+
+// --- name capture -------------------------------------------------------
+
+test('parseReviewPayload reports a captured name from the model payload', () => {
+  const raw = JSON.stringify({
+    understood: true,
+    score: 80,
+    scores: { pronunciation: 80, grammar: 80, fluency: 80 },
+    corrections: [],
+    tip: 'Nice pacing.',
+    words: [],
+    name: 'Marisol',
+  });
+  const result = parseReviewPayload(raw, { user: "Hi, I'm Marisol, nice to meet you" });
+  assert.equal(result.name, 'Marisol');
+});
+
+test('parseReviewPayload defaults name to an empty string when absent from the payload', () => {
+  const raw = JSON.stringify({
+    understood: true,
+    score: 80,
+    scores: { pronunciation: 80, grammar: 80, fluency: 80 },
+    corrections: [],
+    tip: 'Nice pacing.',
+    words: [],
+  });
+  const result = parseReviewPayload(raw, { user: 'I went for a walk' });
+  assert.equal(result.name, '');
+});
+
+test('parseReviewPayload drops a captured name when the turn was not understood', () => {
+  const raw = JSON.stringify({
+    understood: false,
+    score: 40,
+    scores: { pronunciation: 40, grammar: 40, fluency: 40 },
+    corrections: [],
+    tip: '',
+    words: [],
+    name: 'Marisol',
+  });
+  const result = parseReviewPayload(raw, { user: 'mmmff garble noise' });
+  assert.equal(result.understood, false);
+  assert.equal(result.name, '', 'a misheard/hallucinated turn must not (re)write the learner identity');
+});
+
+test('buildReviewPrompt asks the model to extract the learner\'s name when it is not yet known', () => {
+  const prompt = buildReviewPrompt({ user: "I'm Kenji", level: 'B1' });
+  assert.match(prompt, /states their own name/i);
+  assert.doesNotMatch(prompt, /already known/i);
+});
+
+test('buildReviewPrompt tells the model to leave name empty once it is already known', () => {
+  const prompt = buildReviewPrompt({ user: 'Hello again', level: 'B1', learnerName: 'Kenji' });
+  assert.match(prompt, /already known/i);
+  assert.match(prompt, /leave "name" as an empty string/i);
+});
+
+test('review() forwards learnerName into the prompt sent to the model', async () => {
+  let sentPrompt = '';
+  const payload = {
+    understood: true,
+    score: 70,
+    scores: { pronunciation: 70, grammar: 70, fluency: 70 },
+    corrections: [],
+    tip: 'ok',
+    words: [],
+    name: '',
+  };
+  await review({
+    user: 'hello again',
+    assistant: '',
+    level: 'B1',
+    learnerName: 'Kenji',
+    apiKey: 'unused',
+    model: 'unused',
+    fetchImpl: async (_url, opts) => {
+      sentPrompt = JSON.parse(opts.body).contents[0].parts[0].text;
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }) };
+    },
+  });
+  assert.match(sentPrompt, /already known/i);
 });
 
 test('review() throws when the upstream request fails', async () => {
