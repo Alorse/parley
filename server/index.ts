@@ -4,10 +4,11 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { config } from './config.js';
-import { GeminiLiveSession } from './live.js';
-import { review } from './review.js';
-import { translate, hint } from './translate.js';
+import { GeminiLiveSession, type ReviewRequestPayload } from './live.js';
+import { review, type ReviewParams } from './review.js';
+import { translate, hint, type TranslateParams, type HintParams } from './translate.js';
 import { JsonStore } from './store.js';
+import type { ClientMessage, LiveEventMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
 const store = new JsonStore(path.join(config.root, config.dataDir));
@@ -18,7 +19,7 @@ const store = new JsonStore(path.join(config.root, config.dataDir));
 const TEXT_MODELS = [config.geminiTextModel, ...config.geminiTextModelFallbacks];
 const LIVE_MODELS = [config.geminiLiveModel, ...config.geminiLiveModelFallbacks];
 
-const MIME_TYPES = {
+const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -36,15 +37,15 @@ let activeSessions = 0;
 // app (or a browser) that keys on the URL alone can serve a stale styles.css or
 // app.js next to a fresh index.html. HTML and code therefore always revalidate;
 // only rarely-changing binary assets (fonts/icons) get a real cache lifetime.
-function cacheControlFor(ext) {
+function cacheControlFor(ext: string): string {
   if (ext === '.woff2' || ext === '.png' || ext === '.ico') {
     return 'public, max-age=86400';
   }
   return 'no-cache';
 }
 
-async function serveStatic(req, res) {
-  let urlPath = decodeURIComponent(req.url.split('?')[0]);
+async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  let urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
   const fullPath = path.normalize(path.join(PUBLIC_DIR, urlPath));
   if (!fullPath.startsWith(PUBLIC_DIR)) {
@@ -77,16 +78,20 @@ async function serveStatic(req, res) {
   }
 }
 
-async function readJsonBody(req) {
-  const chunks = [];
+async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString('utf8');
   return raw ? JSON.parse(raw) : {};
 }
 
-function sendJson(res, status, body) {
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -106,21 +111,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && req.url === '/api/review') {
-      const body = await readJsonBody(req);
+      const body = (await readJsonBody(req)) as ReviewParams;
       const result = await review({ ...body, apiKey: config.googleApiKey, models: TEXT_MODELS });
       sendJson(res, 200, result);
       return;
     }
 
     if (req.method === 'POST' && req.url === '/api/translate') {
-      const body = await readJsonBody(req);
+      const body = (await readJsonBody(req)) as TranslateParams;
       const result = await translate({ ...body, apiKey: config.googleApiKey, models: TEXT_MODELS });
       sendJson(res, 200, result);
       return;
     }
 
     if (req.method === 'POST' && req.url === '/api/hint') {
-      const body = await readJsonBody(req);
+      const body = (await readJsonBody(req)) as HintParams;
       const result = await hint({ ...body, apiKey: config.googleApiKey, models: TEXT_MODELS });
       sendJson(res, 200, result);
       return;
@@ -134,12 +139,20 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404);
     res.end();
   } catch (err) {
-    console.error('request error:', err.message);
+    console.error('request error:', errorMessage(err));
     sendJson(res, 500, { error: 'internal error' });
   }
 });
 
 const wss = new WebSocketServer({ server, path: '/live' });
+
+interface StoredProfile {
+  scenario?: string;
+  level?: string;
+  voice?: string;
+  halfDuplex?: boolean;
+  feedbackDetail?: string;
+}
 
 wss.on('connection', (ws) => {
   if (activeSessions >= config.maxSessions) {
@@ -149,7 +162,7 @@ wss.on('connection', (ws) => {
   }
 
   activeSessions += 1;
-  let session = null;
+  let session: GeminiLiveSession | null = null;
   let alive = true;
 
   const pingInterval = setInterval(() => {
@@ -166,17 +179,15 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('message', async (raw) => {
-    let msg;
+    let msg: ClientMessage;
     try {
-      msg = JSON.parse(raw.toString());
+      msg = JSON.parse(raw.toString()) as ClientMessage;
     } catch {
       return;
     }
 
     if (msg.type === 'start') {
-      /** @type {{ scenario?: string, level?: string, voice?: string, halfDuplex?: boolean, feedbackDetail?: string }} */
-      const profileFallback = {};
-      const profile = store.read('profile', profileFallback);
+      const profile = store.read<StoredProfile>('profile', {});
       const scenario = msg.scenario ?? profile.scenario ?? 'Just talk';
       const level = msg.level ?? profile.level ?? 'B1';
       const voice = msg.voice ?? profile.voice ?? config.tutorVoice;
@@ -188,7 +199,7 @@ wss.on('connection', (ws) => {
       // completes setup — a model-specific outage or quota exhaustion
       // shouldn't take the whole session down. Listeners must be attached
       // before start() so we never miss the initial 'ready'/greeting audio.
-      let lastError;
+      let lastError: unknown;
       for (const liveModel of LIVE_MODELS) {
         const candidate = new GeminiLiveSession({
           apiKey: config.googleApiKey,
@@ -200,16 +211,16 @@ wss.on('connection', (ws) => {
           feedbackDetail,
         });
 
-        candidate.on('client', (clientMsg) => {
+        candidate.on('client', (clientMsg: LiveEventMessage) => {
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(clientMsg));
         });
 
-        candidate.on('review-request', async (turn) => {
+        candidate.on('review-request', async (turn: ReviewRequestPayload) => {
           try {
             const result = await review({ ...turn, apiKey: config.googleApiKey, models: TEXT_MODELS });
             if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'review', ...result }));
           } catch (err) {
-            console.error('review failed:', err.message);
+            console.error('review failed:', errorMessage(err));
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify({ type: 'review', error: 'Review is unavailable right now.' }));
             }
@@ -224,12 +235,12 @@ wss.on('connection', (ws) => {
         } catch (err) {
           lastError = err;
           candidate.stop();
-          console.error(`live session failed to start with model ${liveModel}:`, err.message);
+          console.error(`live session failed to start with model ${liveModel}:`, errorMessage(err));
         }
       }
 
       if (!session) {
-        console.error('live session failed to start on every model fallback:', lastError && lastError.message);
+        console.error('live session failed to start on every model fallback:', lastError ? errorMessage(lastError) : undefined);
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ type: 'error', message: 'Could not reach the tutor right now.' }));
         }

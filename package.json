@@ -8,8 +8,8 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
+    "start": "node --import tsx server/index.ts",
+    "dev": "tsx watch server/index.ts",
     "test": "node --import tsx --test test/*.test.js",
     "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json && tsc -p tsconfig.sw.json && tsc -p tsconfig.worklet.json",
     "e2e": "node scripts/e2e-live.mjs",
