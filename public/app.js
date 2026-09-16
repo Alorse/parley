@@ -1,6 +1,6 @@
 import { iconMarkup } from './icons.js';
 import { Orb, MicWaveform } from './orb.js';
-import { SCENARIOS, SCENARIO_CATEGORIES, JUST_TALK, masteryTier, recordWordSighting, searchWords, getAllWords } from './data.js';
+import { SCENARIOS, SCENARIO_CATEGORIES, JUST_TALK, masteryTier, recordWordSighting, searchWords, getAllWords, getProfile, setProfileName } from './data.js';
 import { LiveClient } from './live-client.js';
 import { AudioCapture } from './audio-capture.js';
 import { AudioPlayer } from './audio-player.js';
@@ -77,6 +77,7 @@ const state = {
   screen: 'talk',
   scenario: JUST_TALK,
   settings: loadSettings(),
+  profile: getProfile(),
   sessionStarted: false,
   micOn: false,
   uiState: 'idle',
@@ -250,6 +251,13 @@ function handleReview(msg) {
       recordWordSighting({ word: w.word, meaning: w.meaning, sentence: state.lastUserText });
     }
   }
+
+  // The server only ever reports a name here when one wasn't already known
+  // (see review.ts's nameInstruction), so this can't clobber a name the
+  // learner set by hand in Settings.
+  if (msg.name && !state.profile.name) {
+    state.profile = setProfileName(state.profile, msg.name);
+  }
 }
 
 function openScoreSheet() {
@@ -291,6 +299,7 @@ async function ensureSession() {
       voice: state.settings.voice,
       halfDuplex: state.settings.halfDuplex,
       feedbackDetail: state.settings.feedbackDetail,
+      name: state.profile.name,
     })
     .then(() => {
       state.sessionStarted = true;
@@ -602,6 +611,7 @@ function updateSetting(key, value) {
 }
 
 function renderSettingsSheet() {
+  el('name-input').value = state.profile.name || '';
   renderPillGroup('voice-options', VOICES.map((v) => ({ value: v, label: v })), state.settings.voice, (v) => updateSetting('voice', v));
   renderPillGroup('level-options', LEVELS.map((v) => ({ value: v, label: v })), state.settings.level, (v) => updateSetting('level', v));
   renderPillGroup('feedback-options', FEEDBACK_OPTIONS, state.settings.feedbackDetail, (v) => updateSetting('feedbackDetail', v));
@@ -618,6 +628,11 @@ el('half-duplex-toggle').addEventListener('click', () => {
   const interruptionsOn = el('half-duplex-toggle').getAttribute('aria-checked') !== 'true';
   el('half-duplex-toggle').setAttribute('aria-checked', String(interruptionsOn));
   updateSetting('halfDuplex', !interruptionsOn);
+});
+
+el('name-input').addEventListener('change', (e) => {
+  state.profile = setProfileName(state.profile, e.target.value);
+  e.target.value = state.profile.name;
 });
 
 el('save-words-toggle').addEventListener('click', () => {
@@ -651,7 +666,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=4').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=5').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

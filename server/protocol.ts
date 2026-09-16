@@ -12,6 +12,7 @@ export interface StartMessage {
   voice?: string;
   halfDuplex?: boolean;
   feedbackDetail?: string;
+  name?: string;
 }
 
 export interface AudioMessage {

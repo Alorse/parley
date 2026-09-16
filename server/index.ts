@@ -153,6 +153,7 @@ interface StoredProfile {
   voice?: string;
   halfDuplex?: boolean;
   feedbackDetail?: string;
+  name?: string;
 }
 
 wss.on('connection', (ws) => {
@@ -194,7 +195,8 @@ wss.on('connection', (ws) => {
       const voice = msg.voice ?? profile.voice ?? config.tutorVoice;
       const halfDuplex = msg.halfDuplex ?? profile.halfDuplex ?? true;
       const feedbackDetail = msg.feedbackDetail ?? profile.feedbackDetail ?? 'every-turn';
-      store.write('profile', { scenario, level, voice, halfDuplex, feedbackDetail });
+      const name = msg.name ?? profile.name ?? '';
+      store.write('profile', { scenario, level, voice, halfDuplex, feedbackDetail, name });
 
       // Try each live model in the fallback chain until one actually
       // completes setup — a model-specific outage or quota exhaustion
@@ -210,6 +212,7 @@ wss.on('connection', (ws) => {
           level,
           halfDuplex,
           feedbackDetail,
+          learnerName: name,
         });
 
         candidate.on('client', (clientMsg: LiveEventMessage) => {
@@ -220,6 +223,7 @@ wss.on('connection', (ws) => {
           try {
             const result = await review({ ...turn, apiKey: config.googleApiKey, models: TEXT_MODELS });
             if (result.corrections.length > 0) candidate.armSilenceNudge();
+            if (result.name) candidate.setLearnerName(result.name);
             if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'review', ...result }));
           } catch (err) {
             console.error('review failed:', errorMessage(err));

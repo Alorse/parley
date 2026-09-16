@@ -73,3 +73,25 @@ test('buildSystemPrompt still asks a follow-up question when there is nothing to
     assert.match(prompt, /when you have nothing to correct.*ask one natural follow-up question/i);
   }
 });
+
+// --- learner name ------------------------------------------------------
+
+test('buildSystemPrompt tells the tutor to ask for the learner\'s name when it is unknown', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.match(prompt, /don't know the learner's name yet/i);
+  assert.match(prompt, /ask for their name/i);
+  assert.doesNotMatch(prompt, /The learner's name is/);
+});
+
+test('buildSystemPrompt tells the tutor the learner\'s name when known, and not to ask again', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', learnerName: 'Marisol' });
+  assert.match(prompt, /The learner's name is Marisol/);
+  assert.match(prompt, /Do not ask for their name again/i);
+  assert.doesNotMatch(prompt, /don't know the learner's name yet/i);
+});
+
+test('buildSystemPrompt instructs occasional, not constant, use of a known name', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', learnerName: 'Kenji' });
+  assert.match(prompt, /now and then/i);
+  assert.match(prompt, /never in every turn/i);
+});

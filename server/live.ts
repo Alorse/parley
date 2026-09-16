@@ -242,6 +242,7 @@ export interface GeminiLiveSessionOptions {
   nativeLanguage?: string;
   feedbackDetail?: string;
   halfDuplex?: boolean;
+  learnerName?: string;
   webSocketImpl?: any;
 }
 
@@ -249,6 +250,7 @@ export interface ReviewRequestPayload {
   user: string;
   assistant: string;
   level: string;
+  learnerName?: string;
 }
 
 // One upstream Live session per browser WebSocket connection. Emits 'client'
@@ -263,6 +265,7 @@ export class GeminiLiveSession extends EventEmitter {
   level: string;
   nativeLanguage: string;
   feedbackDetail: string;
+  learnerName: string;
   WebSocketImpl: any;
   gate: HalfDuplexGate;
   nudge: SilenceNudge;
@@ -291,6 +294,7 @@ export class GeminiLiveSession extends EventEmitter {
     nativeLanguage = 'Spanish',
     feedbackDetail = 'every-turn',
     halfDuplex = true,
+    learnerName = '',
     webSocketImpl = resolveWebSocketImpl(),
   }: GeminiLiveSessionOptions) {
     super();
@@ -301,6 +305,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.level = level;
     this.nativeLanguage = nativeLanguage;
     this.feedbackDetail = feedbackDetail;
+    this.learnerName = learnerName;
     this.WebSocketImpl = webSocketImpl;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
     this.nudge = new SilenceNudge();
@@ -325,6 +330,14 @@ export class GeminiLiveSession extends EventEmitter {
 
   setHalfDuplex(enabled: boolean): void {
     this.gate.setEnabled(enabled);
+  }
+
+  // Called once index.ts's review-request handler comes back with a
+  // freshly captured name, so the rest of this session's review requests
+  // stop asking the model to extract one all over again (see
+  // buildReviewPrompt's nameInstruction).
+  setLearnerName(name: string): void {
+    this.learnerName = name;
   }
 
   setScenario(scenario: string): void {
@@ -410,6 +423,7 @@ export class GeminiLiveSession extends EventEmitter {
       level: this.level,
       nativeLanguage: this.nativeLanguage,
       feedbackDetail: this.feedbackDetail,
+      learnerName: this.learnerName,
     });
     this.turn.silent = true;
     this._sendUpstream(textUpstreamFrame(prompt));
@@ -580,7 +594,7 @@ export class GeminiLiveSession extends EventEmitter {
 
     if (!silent) {
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
-      const payload: ReviewRequestPayload = { user: userText, assistant: assistantText, level: this.level };
+      const payload: ReviewRequestPayload = { user: userText, assistant: assistantText, level: this.level, learnerName: this.learnerName };
       this.emit('review-request', payload);
     }
 

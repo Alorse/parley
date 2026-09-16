@@ -17,6 +17,7 @@ export interface BuildSystemPromptOptions {
   level?: string;
   nativeLanguage?: string;
   feedbackDetail?: string;
+  learnerName?: string;
 }
 
 function isLevel(value: string): value is Level {
@@ -31,6 +32,7 @@ export function buildSystemPrompt({
   level = 'B1',
   nativeLanguage = 'Spanish',
   feedbackDetail = 'every-turn',
+  learnerName = '',
 }: BuildSystemPromptOptions = {}): string {
   const normalizedLevel = isLevel(level) ? level : 'B1';
   const guidance = LEVEL_GUIDANCE[normalizedLevel];
@@ -42,10 +44,16 @@ export function buildSystemPrompt({
     feedbackDetail === 'mistakes-only'
       ? 'Only mention a fix when the learner actually made a pronunciation or grammar mistake. If they spoke well, just react warmly and keep the conversation going, no correction needed.'
       : 'Do this after every turn the learner speaks, even when they did well — the fix can simply be a small polish tip when there is no real error.';
+  const nameLine = learnerName
+    ? `The learner's name is ${learnerName}. Use it occasionally, now and then, to make the conversation feel personal — never in every turn, and never more than once in the same turn, since that sounds unnatural. Do not ask for their name again.`
+    : "You don't know the learner's name yet. Make your opening question ask for their name, in a warm, natural way, right after a short greeting. Once they tell you, use it occasionally afterwards, now and then, never in every turn.";
 
   return `You are Parley, a warm, encouraging English conversation partner and pronunciation coach for a ${nativeLanguage}-speaking learner practising English.
 
 Everything you say must be in English. Never use Chinese or any language other than English in your spoken replies.
+
+Learner identity:
+- ${nameLine}
 
 Conversation style:
 - Keep the exchange flowing naturally: 1-3 short sentences per turn.

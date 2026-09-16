@@ -24,9 +24,18 @@ export interface ReviewResult {
   corrections: ReviewCorrection[];
   tip: string;
   words: ReviewWord[];
+  // The learner's own name, only when they actually stated it in this turn
+  // and it wasn't already known — empty string otherwise. See
+  // buildReviewPrompt's nameInstruction for why this never overwrites a name
+  // that's already known.
+  name: string;
 }
 
-const REVIEW_SCHEMA: GeminiSchema = {
+// The base grading schema, without the "name" field — used once the
+// learner's name is already known, so the model isn't asked (and doesn't
+// spend output tokens) to re-report it on every single turn for the rest
+// of the session.
+const REVIEW_SCHEMA_BASE: GeminiSchema = {
   type: 'OBJECT',
   properties: {
     understood: { type: 'BOOLEAN' },
@@ -68,6 +77,16 @@ const REVIEW_SCHEMA: GeminiSchema = {
   required: ['understood', 'score', 'scores', 'corrections', 'tip', 'words'],
 };
 
+const REVIEW_SCHEMA: GeminiSchema = {
+  ...REVIEW_SCHEMA_BASE,
+  properties: { ...REVIEW_SCHEMA_BASE.properties, name: { type: 'STRING' } },
+  required: [...REVIEW_SCHEMA_BASE.required!, 'name'],
+};
+
+function reviewSchemaFor(learnerName?: string): GeminiSchema {
+  return learnerName ? REVIEW_SCHEMA_BASE : REVIEW_SCHEMA;
+}
+
 function emptyReview(): ReviewResult {
   return {
     understood: false,
@@ -76,6 +95,7 @@ function emptyReview(): ReviewResult {
     corrections: [],
     tip: 'Say something out loud and I will give you a pronunciation tip.',
     words: [],
+    name: '',
   };
 }
 
@@ -83,20 +103,28 @@ export interface BuildReviewPromptParams {
   user: string;
   assistant?: string;
   level?: string;
+  learnerName?: string;
 }
 
-export function buildReviewPrompt({ user, assistant, level }: BuildReviewPromptParams): string {
-  return `You are grading one turn of an English-speaking practice conversation for a learner at level ${level || 'B1'}.
+// Once the learner's name is already known, nothing about it belongs in
+// the prompt or the response schema (see reviewSchemaFor) — there's
+// nothing left to ask the model to do.
+export function buildReviewPrompt({ user, assistant, level, learnerName }: BuildReviewPromptParams): string {
+  const nameInstruction = learnerName
+    ? ''
+    : 'If the learner states their own name in this turn (e.g. "My name is X", "I\'m X", "Call me X"), report it in "name". Otherwise leave "name" as an empty string. Never guess or invent a name, and never report anyone\'s name but the learner\'s own.';
+  const nameMention = learnerName ? '' : ", and the learner's own name if captured this turn (see above)";
 
-The learner's transcribed speech (ground truth for what they said):
-"""${user}"""
+  const paragraphs = [
+    `You are grading one turn of an English-speaking practice conversation for a learner at level ${level || 'B1'}.`,
+    `The learner's transcribed speech (ground truth for what they said):\n"""${user}"""`,
+    `The tutor's own reply, for context only (not ground truth about what the learner said):\n"""${assistant || ''}"""`,
+    `Judge pronunciation, grammar, and fluency only from the learner's transcript above and the conversational context. Only report real errors that are actually present in the learner's text — never invent a correction. If the learner's transcript is not intelligible speech at all (empty, gibberish, or noise), set understood to false and score to 0, with no corrections — never guess a middle-of-the-range score for speech you could not actually understand.`,
+    nameInstruction,
+    `Respond with JSON matching the required schema: whether the learner's speech was actually understood (boolean), an overall 0-100 score, per-category scores (pronunciation, grammar, fluency), at most 3 corrections (from/to/why), one short actionable pronunciation tip, and 0-4 notable words worth saving (word + short English meaning)${nameMention}.`,
+  ];
 
-The tutor's own reply, for context only (not ground truth about what the learner said):
-"""${assistant || ''}"""
-
-Judge pronunciation, grammar, and fluency only from the learner's transcript above and the conversational context. Only report real errors that are actually present in the learner's text — never invent a correction. If the learner's transcript is not intelligible speech at all (empty, gibberish, or noise), set understood to false and score to 0, with no corrections — never guess a middle-of-the-range score for speech you could not actually understand.
-
-Respond with JSON matching the required schema: whether the learner's speech was actually understood (boolean), an overall 0-100 score, per-category scores (pronunciation, grammar, fluency), at most 3 corrections (from/to/why), one short actionable pronunciation tip, and 0-4 notable words worth saving (word + short English meaning).`;
+  return paragraphs.filter(Boolean).join('\n\n');
 }
 
 export interface ParseReviewPayloadOptions {
@@ -135,6 +163,7 @@ export function parseReviewPayload(rawJsonText: string, { user }: ParseReviewPay
           .slice(0, 4)
           .map((w: { word?: unknown; meaning?: unknown }) => ({ word: String(w.word ?? ''), meaning: String(w.meaning ?? '') }))
       : [],
+    name: typeof data.name === 'string' ? data.name.trim() : '',
   };
 
   if (!user || !user.trim()) {
@@ -143,10 +172,13 @@ export function parseReviewPayload(rawJsonText: string, { user }: ParseReviewPay
 
   // Never trust the model's own score when it says (or the text implies) it
   // didn't understand the turn — a hallucinated transcript can otherwise
-  // still carry a plausible-looking score straight through.
+  // still carry a plausible-looking score straight through. Same reasoning
+  // applies to a "captured" name: a misheard/hallucinated turn is not
+  // grounds to (re)write the learner's identity.
   if (!result.understood) {
     result.score = 0;
     result.corrections = [];
+    result.name = '';
   }
 
   return result;
@@ -156,20 +188,30 @@ export interface ReviewParams {
   user: string;
   assistant?: string;
   level?: string;
+  learnerName?: string;
   apiKey: string;
   model?: string;
   models?: string[];
   fetchImpl?: typeof fetch;
 }
 
-export async function review({ user, assistant, level, apiKey, model, models, fetchImpl = fetch }: ReviewParams): Promise<ReviewResult> {
+export async function review({
+  user,
+  assistant,
+  level,
+  learnerName,
+  apiKey,
+  model,
+  models,
+  fetchImpl = fetch,
+}: ReviewParams): Promise<ReviewResult> {
   const result = await (async () => {
     if (!user || !user.trim()) {
       return emptyReview();
     }
 
-    const prompt = buildReviewPrompt({ user, assistant, level });
-    const text = await generateContent({ apiKey, model, models, prompt, responseSchema: REVIEW_SCHEMA, fetchImpl });
+    const prompt = buildReviewPrompt({ user, assistant, level, learnerName });
+    const text = await generateContent({ apiKey, model, models, prompt, responseSchema: reviewSchemaFor(learnerName), fetchImpl });
     return parseReviewPayload(text, { user });
   })();
 

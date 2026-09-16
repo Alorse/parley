@@ -16,7 +16,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="/styles.css?v=4" />
+<link rel="stylesheet" href="/styles.css?v=5" />
 </head>
 <body>
 <div id="app" class="app">
@@ -158,6 +158,12 @@
     <h2 class="sheet-title">Settings</h2>
 
     <div class="field-group">
+      <span class="field-label">Your name</span>
+      <input id="name-input" class="field-input" type="text" placeholder="Not set yet — Parley will ask" autocomplete="name" maxlength="40" />
+      <p class="field-hint">So Parley can use it now and then. Fix it here if it heard you wrong.</p>
+    </div>
+
+    <div class="field-group">
       <span class="field-label">Voice</span>
       <div id="voice-options" class="pill-options" data-field="voice"></div>
     </div>
@@ -213,6 +219,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=4"></script>
+<script type="module" src="/app.js?v=5"></script>
 </body>
 </html>

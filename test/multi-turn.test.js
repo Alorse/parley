@@ -42,12 +42,13 @@ function turnCompleteMessage() {
   return { serverContent: { turnComplete: true } };
 }
 
-async function startSession() {
+async function startSession(options = {}) {
   const session = new GeminiLiveSession({
     apiKey: 'k',
     model: 'm',
     voice: 'Kore',
     webSocketImpl: FakeUpstreamSocket,
+    ...options,
   });
   const clientEvents = [];
   session.on('client', (msg) => clientEvents.push(msg));
@@ -132,6 +133,58 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
   }
 
   assert.equal(acceptedTurns, 6, 'every one of 6 sequential turns found the mic open after its predecessor finished');
+
+  session.stop();
+});
+
+// --- learner name flows into the review request ----------------------------
+
+test('a completed turn\'s review-request payload carries the session\'s learnerName', async () => {
+  const { session, ws } = await startSession({ learnerName: 'Kenji' });
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
+  await delay(450);
+
+  ws.emitServerMessage(inputTranscriptionMessage("I'm Kenji"));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 1);
+  assert.equal(reviewRequests[0].learnerName, 'Kenji');
+
+  session.stop();
+});
+
+test('setLearnerName updates the name carried by every later review-request, once the tutor learns it mid-session', async () => {
+  const { session, ws } = await startSession(); // no learnerName yet
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
+  await delay(450);
+
+  // Turn 1: the learner introduces themselves — index.ts's review-request
+  // handler would call setLearnerName once review.ts reports the captured
+  // name back, which is what this simulates directly.
+  ws.emitServerMessage(inputTranscriptionMessage("I'm Priya"));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+  assert.equal(reviewRequests[0].learnerName, '', 'not known yet for this first turn');
+  session.setLearnerName('Priya');
+  await delay(450);
+
+  // Turn 2: the session must now report the name on every later turn,
+  // without needing a fresh 'start' handshake.
+  ws.emitServerMessage(inputTranscriptionMessage('Tell me more'));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 2);
+  assert.equal(reviewRequests[1].learnerName, 'Priya');
 
   session.stop();
 });

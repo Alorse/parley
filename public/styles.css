@@ -943,6 +943,22 @@ svg {
   margin: 0;
 }
 
+.field-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.field-input::placeholder { color: var(--ink-faint); }
+.field-input:focus { outline: none; }
+
 .pill-options {
   display: flex;
   gap: 8px;
