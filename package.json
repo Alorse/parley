@@ -12,6 +12,7 @@
     "dev": "node --watch server/index.js",
     "test": "node --test test/*.test.js",
     "e2e": "node scripts/e2e-live.mjs",
+    "browser-check": "node scripts/browser-check.mjs",
     "icons": "python3 scripts/make_icons.py"
   },
   "dependencies": {

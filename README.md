@@ -99,6 +99,19 @@ npm run e2e # real end-to-end against the live Gemini API: spawns the
             # test/fixtures/speech.pcm — later runs are fast/offline for
             # that part (the /live and /api/review calls still hit the
             # real API).
+
+npm run browser-check  # real headless-Chrome check: launches Chrome with a
+            # FAKE MICROPHONE (a looping WAV, --use-fake-device-for-media-
+            # stream), drives the actual page over the DevTools Protocol —
+            # click the mic, wait, sample DOM state — and saves screenshots
+            # + a report.json. Proves getUserMedia, AudioWorklet, canvas
+            # rendering, and the WS session all work in a real browser,
+            # which npm test / npm run e2e cannot (they never load a page).
+            # Needs Chrome/Chromium installed; not part of the fast suite.
+            # Usage: node scripts/browser-check.mjs [url] [wav] [outdir]
+            #   [--mobile|--desktop] [--seconds N]
+            # Defaults: http://127.0.0.1:8322, test/fixtures/fake-mic.wav,
+            # tmp/browser-check (git-ignored).
 ```
 
 ## Testing the mic in a browser
