@@ -95,3 +95,18 @@ test('buildSystemPrompt instructs occasional, not constant, use of a known name'
   assert.match(prompt, /now and then/i);
   assert.match(prompt, /never in every turn/i);
 });
+
+test('buildSystemPrompt weaves in the memory note when present', () => {
+  const prompt = buildSystemPrompt({
+    scenario: 'Just talk',
+    level: 'B1',
+    memoryNote: 'talked about the weekend; the past tense was hard',
+  });
+  assert.match(prompt, /talked about the weekend; the past tense was hard/);
+  assert.match(prompt, /follow-up/i);
+});
+
+test('buildSystemPrompt says nothing about a remembered conversation when there is no memory note', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.doesNotMatch(prompt, /remember this from earlier conversations/i);
+});

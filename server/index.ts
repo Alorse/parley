@@ -196,6 +196,11 @@ wss.on('connection', (ws) => {
       const halfDuplex = msg.halfDuplex ?? profile.halfDuplex ?? true;
       const feedbackDetail = msg.feedbackDetail ?? profile.feedbackDetail ?? 'every-turn';
       const name = msg.name ?? profile.name ?? '';
+      // Deliberately not defaulted from `profile`/written back to it: the
+      // memory note lives only on the learner's device (public/data.js), so
+      // the server never gets a copy of it to remember between sessions —
+      // if the client doesn't send one, there's simply no note this time.
+      const memoryNote = msg.memoryNote ?? '';
       store.write('profile', { scenario, level, voice, halfDuplex, feedbackDetail, name });
 
       // Try each live model in the fallback chain until one actually
@@ -213,6 +218,7 @@ wss.on('connection', (ws) => {
           halfDuplex,
           feedbackDetail,
           learnerName: name,
+          memoryNote,
         });
 
         candidate.on('client', (clientMsg: LiveEventMessage) => {
