@@ -7,6 +7,8 @@ import {
   textUpstreamFrame,
   buildSetupFrame,
   HalfDuplexGate,
+  SilenceNudge,
+  containsStackedTurn,
   resolveWebSocketImpl,
   GeminiLiveSession,
 } from '../server/live.js';
@@ -149,4 +151,74 @@ test('HalfDuplexGate: re-arms correctly across many consecutive turns (fake cloc
     assert.equal(gate.isGated(), false, `turn ${turn}: gate re-opens once the tail guard elapses`);
     now += 1000; // the learner speaks for a while before the next turn starts
   }
+});
+
+// --- anti-freeze silence nudge (fake clock) ---------------------------------
+
+test('SilenceNudge: not armed and does not fire before arm() is called', () => {
+  const nudge = new SilenceNudge({ delayMs: 6000 });
+  assert.equal(nudge.isArmed(), false);
+  assert.equal(nudge.shouldFire(), false);
+});
+
+test('SilenceNudge: fires once the delay elapses after arming', () => {
+  let now = 1000;
+  const nudge = new SilenceNudge({ delayMs: 6000, now: () => now });
+  nudge.arm();
+  assert.equal(nudge.isArmed(), true);
+  assert.equal(nudge.shouldFire(), false, 'not yet — delay has not elapsed');
+
+  now += 5999;
+  assert.equal(nudge.shouldFire(), false, 'still not yet — 1ms short of the delay');
+
+  now += 1;
+  assert.equal(nudge.shouldFire(), true, 'fires once the delay has fully elapsed');
+});
+
+test('SilenceNudge: never fires twice for the same arm', () => {
+  let now = 0;
+  const nudge = new SilenceNudge({ delayMs: 1000, now: () => now });
+  nudge.arm();
+  now += 1000;
+  assert.equal(nudge.shouldFire(), true, 'fires the first time the delay elapses');
+  now += 5000;
+  assert.equal(nudge.shouldFire(), false, 'does not fire again for the same arm, however long we wait');
+});
+
+test('SilenceNudge: disarmed by learner input never fires', () => {
+  let now = 0;
+  const nudge = new SilenceNudge({ delayMs: 1000, now: () => now });
+  nudge.arm();
+  now += 500;
+  nudge.disarm();
+  assert.equal(nudge.isArmed(), false);
+  now += 5000;
+  assert.equal(nudge.shouldFire(), false, 'disarming clears the armed timestamp, so it can never fire for that arm');
+});
+
+test('SilenceNudge: re-arming after a fire resets it for another turn', () => {
+  let now = 0;
+  const nudge = new SilenceNudge({ delayMs: 1000, now: () => now });
+  nudge.arm();
+  now += 1000;
+  assert.equal(nudge.shouldFire(), true);
+
+  now += 2000;
+  nudge.arm(); // a later turn also came back with a correction
+  assert.equal(nudge.shouldFire(), false, 'freshly armed, delay has not elapsed yet');
+  now += 1000;
+  assert.equal(nudge.shouldFire(), true, 'fires again for the new arm');
+});
+
+// --- stacked-turn compliance signal ------------------------------------------
+
+test('containsStackedTurn: flags a correction invitation followed by a question mark', () => {
+  assert.equal(containsStackedTurn("Nice try! Just try saying it again — so, what's your favorite food?"), true);
+  assert.equal(containsStackedTurn('Go on, give that one a go? What do you think?'), true);
+});
+
+test('containsStackedTurn: does not flag an invitation with no question, or a question with no invitation', () => {
+  assert.equal(containsStackedTurn('Nice try! Try saying it again.'), false);
+  assert.equal(containsStackedTurn('That flowed well — what did you do this weekend?'), false);
+  assert.equal(containsStackedTurn(''), false);
 });

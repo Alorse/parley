@@ -135,3 +135,92 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
 
   session.stop();
 });
+
+// --- anti-freeze silence nudge, wired through a real session ----------------
+
+function textOf(frame) {
+  return frame.clientContent?.turns?.[0]?.parts?.[0]?.text;
+}
+
+test('armSilenceNudge speaks the nudge via say() if the learner stays silent', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  const sentBeforeNudge = ws.sent.length;
+  session.nudge.delayMs = 30; // short delay so the test doesn't wait 6s
+  session.armSilenceNudge();
+
+  await delay(60);
+  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFrames.length, 1, 'the nudge text was sent upstream exactly once');
+
+  session.stop();
+});
+
+function inputTranscriptionMessage(text) {
+  return { serverContent: { inputTranscription: { text } } };
+}
+
+test('armSilenceNudge is NOT disarmed by a raw sendAudio frame — the client streams mic audio continuously, silence included', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  const sentBeforeNudge = ws.sent.length;
+  session.nudge.delayMs = 30;
+  session.armSilenceNudge();
+
+  // The browser client sends mic frames unconditionally, even while silent —
+  // a raw frame must not be mistaken for the learner actually speaking.
+  session.sendAudio('silent-mic-frame-the-client-sends-regardless');
+  await delay(60);
+
+  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFrames.length, 1, 'a raw audio frame does not disarm the nudge, so it still fires');
+
+  session.stop();
+});
+
+test('armSilenceNudge is disarmed once the learner\'s speech is actually transcribed', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  const sentBeforeNudge = ws.sent.length;
+  session.nudge.delayMs = 30;
+  session.armSilenceNudge();
+
+  // Upstream reports real transcribed speech — this is the actual "the
+  // learner started talking" signal, unlike a raw sendAudio frame.
+  ws.emitServerMessage(inputTranscriptionMessage('okay let me try'));
+  await delay(60);
+
+  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFrames.length, 0, 'transcribed speech disarmed the nudge before its delay elapsed');
+
+  session.stop();
+});
+
+test('armSilenceNudge fires at most once even if re-armed after already firing', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  session.nudge.delayMs = 30;
+  session.armSilenceNudge();
+  await delay(60);
+
+  const sentAfterFirstFire = ws.sent.length;
+  assert.equal(session.nudge.shouldFire(), false, 'already fired once for this arm');
+
+  await delay(60);
+  const nudgeFramesAfterWaiting = ws.sent.slice(sentAfterFirstFire).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFramesAfterWaiting.length, 0, 'no second nudge without a fresh arm');
+
+  session.stop();
+});
