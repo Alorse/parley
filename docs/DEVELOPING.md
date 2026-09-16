@@ -62,7 +62,7 @@ Worth knowing: the `node` in your shell and the `node` that runs the service can
 be **different binaries**. A regression that only breaks on the older runtime
 (e.g. relying on the global `WebSocket`) will pass every test you run from your
 shell and still take the running app down. Sanity-check with the exact binary
-you release:
+you actually run:
 
 ```bash
 /usr/bin/node --version
