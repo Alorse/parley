@@ -199,15 +199,12 @@ el('error-dismiss').addEventListener('click', hideError);
 
 // --- score pill + sheet --------------------------------------------------
 
-const SCORE_RING_CIRCUMFERENCE = 2 * Math.PI * 15.5;
-
 function handleReview(msg) {
   if (msg.error) return;
   state.lastReview = msg;
 
   el('score-value').textContent = String(msg.score);
-  const offset = SCORE_RING_CIRCUMFERENCE * (1 - msg.score / 100);
-  el('score-ring-fg').style.strokeDashoffset = String(offset);
+  el('score-meter-fill').style.width = `${Math.max(0, Math.min(100, msg.score))}%`;
   el('score-tip').textContent = msg.tip || '';
   el('score-pill').classList.remove('hidden');
   // The score pill can land below the fold once the transcript grows long;
@@ -425,8 +422,6 @@ el('type-form').addEventListener('submit', async (e) => {
 
 // --- Themes screen ---------------------------------------------------------
 
-const PASTEL_ORDER = ['peach', 'lavender', 'sage', 'butter'];
-
 function selectScenario(title) {
   const changed = title !== state.scenario;
   state.scenario = title;
@@ -463,7 +458,7 @@ function renderThemeGrid() {
   el('theme-grid').innerHTML = filtered
     .map(
       (s) => `
-      <button class="theme-card theme-card--${s.pastel}" data-id="${s.id}" type="button">
+      <button class="theme-card theme-card--${s.tone}" data-id="${s.id}" type="button">
         <span class="theme-card-icon">${iconMarkup(s.icon)}</span>
         <span>
           <p class="theme-card-title">${escapeHtml(s.title)}</p>

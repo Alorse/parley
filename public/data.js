@@ -1,16 +1,16 @@
 // Themes catalogue and the localStorage-backed word store (mastery tracking).
 
 export const SCENARIOS = [
-  { id: 'cafe', title: 'A café', subtitle: 'Something warm, please', icon: 'cup', category: 'Everyday', pastel: 'peach' },
-  { id: 'weekend', title: 'The weekend', subtitle: 'Tell me about yours', icon: 'sun', category: 'Everyday', pastel: 'lavender' },
-  { id: 'walk', title: 'A little walk', subtitle: 'Out and about', icon: 'tree', category: 'Everyday', pastel: 'sage' },
-  { id: 'interview', title: 'Job interview', subtitle: 'Show what you can do', icon: 'briefcase', category: 'Work', pastel: 'butter' },
-  { id: 'airport', title: 'At the airport', subtitle: 'Gate, seat, delays', icon: 'plane', category: 'Travel', pastel: 'peach' },
-  { id: 'hotel', title: 'Hotel check-in', subtitle: 'I have a booking', icon: 'key', category: 'Travel', pastel: 'lavender' },
-  { id: 'smalltalk', title: 'Small talk', subtitle: "Nice weather, isn't it?", icon: 'bubble', category: 'Social', pastel: 'sage' },
-  { id: 'dinner', title: 'Dinner out', subtitle: 'What are you having?', icon: 'utensils', category: 'Social', pastel: 'butter' },
-  { id: 'phone', title: 'On the phone', subtitle: 'Can you hear me now?', icon: 'phone', category: 'Everyday', pastel: 'peach' },
-  { id: 'plans', title: 'Making plans', subtitle: 'Friday, maybe?', icon: 'calendar', category: 'Social', pastel: 'lavender' },
+  { id: 'cafe', title: 'A café', subtitle: 'Something warm, please', icon: 'cup', category: 'Everyday', tone: 'rose' },
+  { id: 'weekend', title: 'The weekend', subtitle: 'Tell me about yours', icon: 'sun', category: 'Everyday', tone: 'plum' },
+  { id: 'walk', title: 'A little walk', subtitle: 'Out and about', icon: 'tree', category: 'Everyday', tone: 'moss' },
+  { id: 'interview', title: 'Job interview', subtitle: 'Show what you can do', icon: 'briefcase', category: 'Work', tone: 'amber' },
+  { id: 'airport', title: 'At the airport', subtitle: 'Gate, seat, delays', icon: 'plane', category: 'Travel', tone: 'rose' },
+  { id: 'hotel', title: 'Hotel check-in', subtitle: 'I have a booking', icon: 'key', category: 'Travel', tone: 'plum' },
+  { id: 'smalltalk', title: 'Small talk', subtitle: "Nice weather, isn't it?", icon: 'bubble', category: 'Social', tone: 'moss' },
+  { id: 'dinner', title: 'Dinner out', subtitle: 'What are you having?', icon: 'utensils', category: 'Social', tone: 'amber' },
+  { id: 'phone', title: 'On the phone', subtitle: 'Can you hear me now?', icon: 'phone', category: 'Everyday', tone: 'rose' },
+  { id: 'plans', title: 'Making plans', subtitle: 'Friday, maybe?', icon: 'calendar', category: 'Social', tone: 'plum' },
 ];
 
 export const SCENARIO_CATEGORIES = ['All', 'Everyday', 'Work', 'Travel', 'Social'];

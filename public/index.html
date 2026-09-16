@@ -1,19 +1,21 @@
 <!doctype html>
-<html lang="en" style="color-scheme: light">
+<html lang="en" style="color-scheme: dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Parley — English speaking tutor</title>
 <meta name="description" content="Voice-first English speaking practice with a warm, patient tutor." />
-<meta name="theme-color" content="#F7F0E4" />
+<meta name="theme-color" content="#181320" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Parley" />
 <link rel="manifest" href="/manifest.webmanifest" />
 <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
 <link rel="icon" href="/icons/icon-192.png" sizes="192x192" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-<link rel="preload" href="/fonts/the previous font-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -21,12 +23,12 @@
 
   <!-- ============================ Talk screen ============================ -->
   <main id="screen-talk" class="screen screen-talk" data-screen="talk">
-    <div class="talk-top">
-      <header class="app-header">
-        <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
-        <button id="settings-btn" class="icon-btn" type="button" aria-label="Settings" data-icon="settings"></button>
-      </header>
+    <header class="app-header">
+      <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
+      <button id="settings-btn" class="icon-btn" type="button" aria-label="Settings" data-icon="settings"></button>
+    </header>
 
+    <div class="talk-stage">
       <div id="topic-chip" class="topic-chip hidden"></div>
 
       <div class="orb-wrap">
@@ -42,18 +44,13 @@
         <p id="tutor-translation" class="tutor-translation hidden"></p>
         <p id="user-line" class="user-line hidden"><span class="you-label">You</span><span id="user-line-text"></span></p>
       </section>
-    </div>
 
-    <div class="talk-bottom">
       <button id="score-pill" class="score-pill hidden" type="button">
-        <span class="score-ring">
-          <svg viewBox="0 0 36 36" aria-hidden="true">
-            <path class="score-ring-bg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
-            <path id="score-ring-fg" class="score-ring-fg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
-          </svg>
-          <span id="score-value" class="score-value">0</span>
+        <span id="score-value" class="score-value">0</span>
+        <span class="score-meter-track">
+          <span class="score-meter-bar"><span id="score-meter-fill" class="score-meter-fill"></span></span>
+          <span id="score-tip" class="score-tip"></span>
         </span>
-        <span id="score-tip" class="score-tip"></span>
       </button>
 
       <div class="controls-row">
@@ -98,7 +95,6 @@
       <input id="themes-search" type="text" placeholder="Find a conversation" autocomplete="off" />
     </div>
 
-    <p class="eyebrow">A PLACE TO BEGIN</p>
     <h1 class="screen-heading">What's on your mind?</h1>
     <p class="screen-subtitle">Same tutor, somewhere new.</p>
 
@@ -125,7 +121,6 @@
       <input id="words-search" type="text" placeholder="Find a word" autocomplete="off" />
     </div>
 
-    <p class="eyebrow">LITTLE BY LITTLE · ENGLISH</p>
     <h1 class="screen-heading">Your words.</h1>
     <p class="screen-subtitle">Words that came up in your conversations.</p>
 

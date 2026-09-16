@@ -39,7 +39,7 @@ const RAW_ICONS = {
 
   briefcase: `<rect x="3" y="7.5" width="18" height="11.5" rx="2" ${STROKE}/><path ${STROKE} d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5"/><path ${STROKE} d="M3 12.5h18"/>`,
 
-  plane: `<path ${STROKE} d="M12 3l1.6 5.4 6.4 3-6.4 1.2-1.6 5.4-1.6-5.4-6.4-1.2 6.4-3z"/>`,
+  plane: `<path ${STROKE} d="M20 4 4 11l7 2.5L13.5 20 20 4Z"/><path ${STROKE} d="M11 13.5 20 4"/>`,
 
   key: `<circle cx="8" cy="8" r="3.5" ${STROKE}/><path ${STROKE} d="M10.5 10.5 19 19M15.5 15.5l2-2M18 18l2-2"/>`,
 
