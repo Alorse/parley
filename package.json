@@ -17,6 +17,7 @@
     "icons": "python3 scripts/make_icons.py"
   },
   "dependencies": {
+    "tsx": "^4.23.13",
     "ws": "^8.18.0"
   },
   "devDependencies": {
