@@ -81,7 +81,7 @@ async function ensureFixture() {
 
 function startServer(port) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['server/index.js'], {
+    const child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
       cwd: ROOT,
       env: { ...process.env, PORT: String(port) },
       stdio: ['ignore', 'pipe', 'pipe'],
