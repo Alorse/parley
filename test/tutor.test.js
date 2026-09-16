@@ -46,3 +46,30 @@ test('buildSystemPrompt never instructs the model to speak a score, in either fe
     assert.match(prompt, /never a score, a number, a percentage/i);
   }
 });
+
+test('buildSystemPrompt mandates a recognizable retry invitation and forbids stacking a question onto a correction, in either feedback cadence', () => {
+  for (const feedbackDetail of ['every-turn', 'mistakes-only']) {
+    const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', feedbackDetail });
+    // The mandated invitation phrase — live.ts's compliance check keys off this.
+    assert.match(prompt, /try saying|give that one a go/i);
+    // A correction turn must end with the invitation, not a new question.
+    assert.match(prompt, /do not ask a new question in the same turn/i);
+    assert.match(prompt, /stop your turn right there/i);
+  }
+});
+
+test('buildSystemPrompt gives the retry attempt a short acknowledgment instead of a fresh correction cycle, in either feedback cadence', () => {
+  for (const feedbackDetail of ['every-turn', 'mistakes-only']) {
+    const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', feedbackDetail });
+    assert.match(prompt, /retrying a phrase you had just corrected/i);
+    assert.match(prompt, /short, warm acknowledgment/i);
+    assert.match(prompt, /do not correct them again/i);
+  }
+});
+
+test('buildSystemPrompt still asks a follow-up question when there is nothing to correct, in either feedback cadence', () => {
+  for (const feedbackDetail of ['every-turn', 'mistakes-only']) {
+    const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', feedbackDetail });
+    assert.match(prompt, /when you have nothing to correct.*ask one natural follow-up question/i);
+  }
+});
