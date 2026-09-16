@@ -417,8 +417,8 @@ svg {
 .type-input:focus { outline: none; }
 
 .type-send {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
@@ -827,20 +827,31 @@ svg {
   color: #fff;
 }
 
+/* 44px-tall tap target with a slimmer visual track, so the switch reads
+   like the the reference app mock but still meets the 44px minimum touch size. */
 .toggle {
   width: 50px;
+  height: 44px;
+  position: relative;
+  flex: none;
+}
+
+.toggle::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  left: 0;
+  right: 0;
   height: 30px;
   border-radius: var(--radius-pill);
   background: var(--cream-sunk);
-  position: relative;
-  flex: none;
   transition: background 0.2s ease;
 }
 
 .toggle::after {
   content: '';
   position: absolute;
-  top: 3px;
+  top: 10px;
   left: 3px;
   width: 24px;
   height: 24px;
@@ -850,7 +861,7 @@ svg {
   transition: transform 0.2s ease;
 }
 
-.toggle[aria-checked="true"] {
+.toggle[aria-checked="true"]::before {
   background: var(--accent);
 }
 
