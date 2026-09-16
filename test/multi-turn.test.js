@@ -42,12 +42,13 @@ function turnCompleteMessage() {
   return { serverContent: { turnComplete: true } };
 }
 
-async function startSession() {
+async function startSession(options = {}) {
   const session = new GeminiLiveSession({
     apiKey: 'k',
     model: 'm',
     voice: 'Kore',
     webSocketImpl: FakeUpstreamSocket,
+    ...options,
   });
   const clientEvents = [];
   session.on('client', (msg) => clientEvents.push(msg));
@@ -132,6 +133,27 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
   }
 
   assert.equal(acceptedTurns, 6, 'every one of 6 sequential turns found the mic open after its predecessor finished');
+
+  session.stop();
+});
+
+// --- learner name flows into the review request ----------------------------
+
+test('a completed turn\'s review-request payload carries the session\'s learnerName', async () => {
+  const { session, ws } = await startSession({ learnerName: 'Kenji' });
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
+  await delay(450);
+
+  ws.emitServerMessage(inputTranscriptionMessage("I'm Kenji"));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 1);
+  assert.equal(reviewRequests[0].learnerName, 'Kenji');
 
   session.stop();
 });
