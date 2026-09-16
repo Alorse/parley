@@ -1,12 +1,27 @@
-const LEVELS = new Set(['A1', 'A2', 'B1', 'B2', 'C1']);
+export type Level = 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
 
-const LEVEL_GUIDANCE = {
+export type FeedbackDetail = 'every-turn' | 'mistakes-only';
+
+const LEVELS = new Set<Level>(['A1', 'A2', 'B1', 'B2', 'C1']);
+
+const LEVEL_GUIDANCE: Record<Level, string> = {
   A1: 'Use very simple, short sentences and the most common words. Speak slowly in spirit (short sentences, one idea at a time).',
   A2: 'Use simple sentences and everyday vocabulary. Avoid idioms.',
   B1: 'Use everyday vocabulary and moderately complex sentences. A few natural idioms are fine.',
   B2: 'Use natural, varied sentences and some idiomatic language, like a fluent conversation partner.',
   C1: 'Use rich, natural, idiomatic English, varied sentence structure, and nuance, like talking with a native speaker.',
 };
+
+export interface BuildSystemPromptOptions {
+  scenario?: string;
+  level?: string;
+  nativeLanguage?: string;
+  feedbackDetail?: string;
+}
+
+function isLevel(value: string): value is Level {
+  return LEVELS.has(value as Level);
+}
 
 // Builds the system prompt sent as the first clientContent turn. Kept as
 // plain English text — the model has no separate systemInstruction channel
@@ -16,8 +31,8 @@ export function buildSystemPrompt({
   level = 'B1',
   nativeLanguage = 'Spanish',
   feedbackDetail = 'every-turn',
-} = {}) {
-  const normalizedLevel = LEVELS.has(level) ? level : 'B1';
+}: BuildSystemPromptOptions = {}): string {
+  const normalizedLevel = isLevel(level) ? level : 'B1';
   const guidance = LEVEL_GUIDANCE[normalizedLevel];
   const sceneLine =
     scenario && scenario !== 'Just talk'
