@@ -1,20 +1,27 @@
-// The animated orb (public/orb.js): a canvas blob whose silhouette and
-// colour react to real audio levels, per the design notes §8.5.
+// The voice — Parley's hero visual (public/orb.js). An asymmetric, organic
+// form (never a uniform circle, never orbited by anything) rendered as
+// soft ink diffusing through water: a closed spline through unevenly
+// spaced points, filled with a slowly turning multi-hue gradient, glowing
+// brighter from within as real audio levels rise. See DESIGN.md.
 
-const HILIGHT = '#FFE3BE';
-const PEACH = '#FF9E5E';
-const ACCENT = '#E8793D';
-const ACCENT_DEEP = '#D9662F';
-const LAVENDER = '#C9A7E0';
-const COOL = '#B9C6E6';
-const RING_RGBA = (a) => `rgba(232,121,61,${a})`;
+const GOLD = '#F0B860';
+const EMBER = '#E2637A';
+const VIOLET = '#8571C4';
+const CORE_LIGHT = '#FFEFD9';
+const HALO_RGBA = (a) => `rgba(226,99,122,${a})`;
 
 const STATE_PARAMS = {
-  idle: { breatheAmp: 0.03, freqScale: 1, levelAmp: 0.02, opacity: 0.9, ringScale: 1, satSpeed: 0.12, coolMix: 0 },
-  listening: { breatheAmp: 0.02, freqScale: 1.6, levelAmp: 0.16, opacity: 1, ringScale: 0.94, satSpeed: 0.3, coolMix: 0 },
-  thinking: { breatheAmp: 0.05, freqScale: 0.5, levelAmp: 0.0, opacity: 0.92, ringScale: 1.05, satSpeed: 0.18, coolMix: 0.4 },
-  speaking: { breatheAmp: 0.035, freqScale: 2.2, levelAmp: 0.24, opacity: 1, ringScale: 1.14, satSpeed: 0.55, coolMix: 0 },
+  idle: { breatheAmp: 0.05, freqScale: 0.7, levelAmp: 0.02, coolMix: 0, coreBase: 0.22, haloBase: 0.12, swirl: 0.04, contract: 0 },
+  listening: { breatheAmp: 0.03, freqScale: 1.3, levelAmp: 0.14, coolMix: 0, coreBase: 0.32, haloBase: 0.15, swirl: 0.08, contract: 0.05 },
+  thinking: { breatheAmp: 0.06, freqScale: 0.5, levelAmp: 0, coolMix: 0.6, coreBase: 0.26, haloBase: 0.14, swirl: 0.4, contract: 0 },
+  speaking: { breatheAmp: 0.045, freqScale: 1.9, levelAmp: 0.2, coolMix: 0, coreBase: 0.55, haloBase: 0.22, swirl: 0.16, contract: 0 },
 };
+
+// The seven base multipliers are deliberately uneven — this is what keeps
+// the form asymmetric ("an ink blot, not a sun") even at rest with zero
+// audio level. A small per-load jitter is added on top so every session
+// has a subtly unique silhouette without losing the underlying character.
+const BASE_LOBES = [1.0, 0.7, 1.16, 0.82, 1.05, 0.62, 0.93];
 
 function mix(c1, c2, t) {
   const a = parseInt(c1.slice(1), 16);
@@ -26,23 +33,6 @@ function mix(c1, c2, t) {
   const g = Math.round(ag + (bg - ag) * t2);
   const bl = Math.round(ab + (bb - ab) * t2);
   return `rgb(${r},${g},${bl})`;
-}
-
-function blobPoints(cx, cy, baseRadius, time, level, params) {
-  const N = 8;
-  const points = [];
-  for (let i = 0; i < N; i++) {
-    const angle = (i / N) * Math.PI * 2;
-    const freq1 = (0.6 + (i % 3) * 0.15) * params.freqScale;
-    const freq2 = (1.3 + (i % 4) * 0.1) * params.freqScale;
-    const phase = i * 1.7;
-    const wobble = Math.sin(time * freq1 + phase) * 0.5 + Math.sin(time * freq2 + phase * 0.5) * 0.3;
-    const breathe = params.breatheAmp * wobble;
-    const levelBump = params.levelAmp * level * (0.6 + 0.4 * Math.sin(angle * 3 + time * 2.4));
-    const r = baseRadius * (1 + breathe + levelBump);
-    points.push({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
-  }
-  return points;
 }
 
 function tracePath(ctx, points) {
@@ -71,9 +61,11 @@ export class Orb {
     this.running = false;
     this.raf = null;
     this.lastFrame = 0;
-    this.dot1Angle = -0.9;
-    this.dot2Angle = 2.6;
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Per-load asymmetry: the fixed lobe shape plus a small unique jitter.
+    this.lobes = BASE_LOBES.map((v) => v + (Math.random() - 0.5) * 0.1);
+    this.phases = BASE_LOBES.map(() => Math.random() * Math.PI * 2);
 
     this._resize = this._resize.bind(this);
     this._resize();
@@ -127,7 +119,25 @@ export class Orb {
     this.time += dt;
     const rate = this.rawLevel > this.level ? 0.5 : 0.08;
     this.level += (this.rawLevel - this.level) * rate;
-    this._render(dt);
+    this._render();
+  }
+
+  _blobPoints(cx, cy, baseRadius, time, level, params) {
+    const n = this.lobes.length;
+    const points = [];
+    const contraction = 1 - params.contract * level;
+    for (let i = 0; i < n; i++) {
+      const angle = (i / n) * Math.PI * 2;
+      const freq1 = (0.5 + (i % 3) * 0.13) * params.freqScale;
+      const freq2 = (1.1 + (i % 4) * 0.09) * params.freqScale;
+      const wobble = Math.sin(time * freq1 + this.phases[i]) * 0.5 + Math.sin(time * freq2 + this.phases[i] * 0.6) * 0.3;
+      const breathe = params.breatheAmp * wobble;
+      const levelBump = params.levelAmp * level * (0.6 + 0.4 * Math.sin(angle * 2.3 + time * 2.1 + this.phases[i]));
+      const lobe = this.lobes[i];
+      const r = baseRadius * lobe * contraction * (1 + breathe + levelBump);
+      points.push({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
+    }
+    return points;
   }
 
   _render() {
@@ -140,24 +150,29 @@ export class Orb {
     const cx = w / 2;
     const cy = h / 2;
     // Kept comfortably under 0.5 (half the canvas) at every state's max
-    // ring/halo multiplier so nothing ever gets hard-clipped by the canvas
-    // edge — that clipping is what previously showed up as a visible
-    // rectangular seam around the orb.
-    const baseRadius = Math.min(w, h) * 0.32;
+    // extent so nothing is ever hard-clipped by the canvas edge.
+    const baseRadius = Math.min(w, h) * 0.3;
     const params = STATE_PARAMS[this.state];
     const level = this.reducedMotion ? 0 : this.level;
-    const time = this.reducedMotion ? this.time * 0.25 : this.time;
-    const breatheAmp = this.reducedMotion ? 0.02 : params.breatheAmp;
+    const time = this.reducedMotion ? this.time * 0.2 : this.time;
+    const breatheAmp = this.reducedMotion ? 0.025 : params.breatheAmp;
     const levelAmp = this.reducedMotion ? 0 : params.levelAmp;
+    const coolMix = this.reducedMotion ? 0 : params.coolMix;
 
-    // --- halo -----------------------------------------------------------
-    // A radial gradient fading to exactly zero alpha at haloR, entirely
-    // inside the canvas — unlike a blurred fill, nothing ever bleeds past
-    // haloR for the canvas edge to hard-clip.
-    const haloR = baseRadius * 1.4;
-    const halo = ctx.createRadialGradient(cx, cy, baseRadius * 0.4, cx, cy, haloR);
-    halo.addColorStop(0, RING_RGBA(0.18));
-    halo.addColorStop(1, RING_RGBA(0));
+    // The gradient centre slowly turns around the shape — visible "thinking"
+    // as ink swirling, always present at a whisper even at rest.
+    const swirlSpeed = this.reducedMotion ? 0.03 : 0.12 + params.swirl * 0.5;
+    const swirlAngle = time * swirlSpeed;
+    const gx = cx + Math.cos(swirlAngle) * baseRadius * 0.32;
+    const gy = cy + Math.sin(swirlAngle * 0.85) * baseRadius * 0.32;
+
+    // --- halo: a radial gradient fading to exact zero alpha well inside
+    // the canvas, so nothing can bleed past it for the edge to clip -------
+    const haloR = baseRadius * 1.42;
+    const haloAlpha = params.haloBase + level * 0.18;
+    const halo = ctx.createRadialGradient(cx, cy, baseRadius * 0.35, cx, cy, haloR);
+    halo.addColorStop(0, HALO_RGBA(haloAlpha));
+    halo.addColorStop(1, HALO_RGBA(0));
     ctx.save();
     ctx.fillStyle = halo;
     ctx.beginPath();
@@ -165,75 +180,31 @@ export class Orb {
     ctx.fill();
     ctx.restore();
 
-    // --- rings + satellites --------------------------------------------
-    const ringMult = this.reducedMotion ? 1 : params.ringScale;
-    const ring1r = baseRadius * 1.14 * ringMult;
-    const ring2r = baseRadius * 1.28 * ringMult;
-    ctx.save();
-    ctx.lineWidth = Math.max(1, this.dpr);
-    ctx.strokeStyle = RING_RGBA(0.28);
-    ctx.beginPath();
-    ctx.arc(cx, cy, ring1r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx, cy, ring2r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-
-    if (this.state === 'thinking' && !this.reducedMotion) {
-      const cyclePhase = (this.time % 0.9) / 0.9;
-      ctx.save();
-      ctx.strokeStyle = RING_RGBA(0.35 * (1 - cyclePhase));
-      ctx.lineWidth = Math.max(1, this.dpr);
-      ctx.beginPath();
-      ctx.arc(cx, cy, baseRadius * (1 + 0.35 * cyclePhase), 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    const satSpeed = this.reducedMotion ? 0.08 : params.satSpeed;
-    this.dot1Angle += satSpeed * 0.033;
-    this.dot2Angle -= satSpeed * 0.021;
-    const dotR1 = Math.max(2, baseRadius * 0.045);
-    const dotR2 = Math.max(1.5, baseRadius * 0.03);
-    ctx.save();
-    ctx.fillStyle = RING_RGBA(0.9);
-    ctx.beginPath();
-    ctx.arc(cx + Math.cos(this.dot1Angle) * ring1r, cy + Math.sin(this.dot1Angle) * ring1r, dotR1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,200,158,0.9)';
-    ctx.beginPath();
-    ctx.arc(cx + Math.cos(this.dot2Angle) * ring2r, cy + Math.sin(this.dot2Angle) * ring2r, dotR2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    // --- the blob body --------------------------------------------------
-    const points = blobPoints(cx, cy, baseRadius, time, level, { ...params, breatheAmp, levelAmp });
+    // --- the voice: an asymmetric organic body, no rings, no satellites --
+    const points = this._blobPoints(cx, cy, baseRadius, time, level, { ...params, breatheAmp, levelAmp });
     ctx.save();
     tracePath(ctx, points);
     ctx.clip();
-    ctx.globalAlpha = params.opacity;
 
-    const hx = cx - baseRadius * 0.32 + Math.cos(time * 0.7) * baseRadius * 0.04;
-    const hy = cy - baseRadius * 0.38 + Math.sin(time * 0.9) * baseRadius * 0.04;
-    const grad = ctx.createRadialGradient(hx, hy, 0, cx, cy, baseRadius * 1.2);
-    const coolMix = this.reducedMotion ? 0 : params.coolMix;
-    grad.addColorStop(0, mix(HILIGHT, COOL, coolMix * 0.5));
-    grad.addColorStop(0.42, mix(PEACH, COOL, coolMix * 0.35));
-    grad.addColorStop(0.78, mix(ACCENT, COOL, coolMix * 0.2));
-    grad.addColorStop(1, mix(ACCENT_DEEP, COOL, coolMix * 0.15));
+    const grad = ctx.createRadialGradient(gx, gy, 0, cx, cy, baseRadius * 1.25);
+    grad.addColorStop(0, mix(GOLD, VIOLET, coolMix * 0.45));
+    grad.addColorStop(0.4, mix(GOLD, EMBER, 1 - coolMix * 0.6));
+    grad.addColorStop(0.72, mix(EMBER, VIOLET, 0.35 + coolMix * 0.35));
+    grad.addColorStop(1, VIOLET);
     ctx.fillStyle = grad;
     ctx.fillRect(cx - baseRadius * 1.3, cy - baseRadius * 1.3, baseRadius * 2.6, baseRadius * 2.6);
 
-    const lavAlpha = this.state === 'speaking' ? 0.5 + level * 0.3 : 0.2 + level * 0.15;
-    const lgrad = ctx.createRadialGradient(
-      cx + baseRadius * 0.55, cy, 0,
-      cx + baseRadius * 0.55, cy, baseRadius * 1.05,
-    );
-    lgrad.addColorStop(0, `rgba(201,167,224,${lavAlpha})`);
-    lgrad.addColorStop(1, 'rgba(201,167,224,0)');
-    ctx.fillStyle = lgrad;
+    // A brighter core near the highlight point, glowing more as the level
+    // rises — the voice literally lighting up from within as it speaks.
+    const coreAlpha = Math.min(1, params.coreBase + level * 0.5);
+    const core = ctx.createRadialGradient(gx, gy, 0, gx, gy, baseRadius * 0.8);
+    core.addColorStop(0, `${CORE_LIGHT}`);
+    core.addColorStop(1, 'rgba(255,239,217,0)');
+    ctx.save();
+    ctx.globalAlpha = coreAlpha;
+    ctx.fillStyle = core;
     ctx.fillRect(cx - baseRadius * 1.3, cy - baseRadius * 1.3, baseRadius * 2.6, baseRadius * 2.6);
+    ctx.restore();
 
     ctx.restore();
   }
@@ -282,11 +253,11 @@ export class MicWaveform {
     ctx.clearRect(0, 0, w, h);
     if (!data || !data.length) return;
 
-    const barCount = 28;
+    const barCount = 26;
     const step = Math.max(1, Math.floor(data.length / barCount));
     const gap = w / barCount;
     const barWidth = Math.max(2, gap * 0.45);
-    ctx.fillStyle = '#F6DECB';
+    ctx.fillStyle = 'rgba(226,99,122,0.4)';
     for (let i = 0; i < barCount; i++) {
       let sum = 0;
       for (let j = 0; j < step; j++) {
