@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Generate the Parley PWA icon set (PIL only, no network).
 
-The mark is the orb: a warm orange radial blob with a lavender bleed on the
-right, sitting on a soft cream rounded square, with two faint orbit rings and
-two satellite dots. Writes public/icons/{icon-192,icon-512,apple-touch-icon}.png
+The mark is "the voice": an asymmetric ink-blot form (never a perfect
+circle, never orbited by anything) filled with the Afterglow gradient
+(gold -> ember -> violet) with a brighter core near the highlight and a
+soft ember halo, on the dusk background. Matches the live hero in
+public/orb.js. Writes public/icons/{icon-192,icon-512,icon-maskable-512,
+apple-touch-icon,favicon.svg}.
 """
 from __future__ import annotations
 
@@ -15,12 +18,16 @@ from PIL import Image, ImageDraw, ImageFilter
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "public", "icons")
 
-CREAM = (247, 240, 228)
-ACCENT = (232, 121, 61)
-ACCENT_DEEP = (217, 102, 47)
-PEACH = (255, 158, 94)
-HILIGHT = (255, 227, 190)
-LAVENDER = (201, 167, 224)
+BG = (24, 19, 32)          # --bg
+GOLD = (240, 184, 96)       # --gold
+EMBER = (226, 99, 122)      # --ember
+VIOLET = (133, 113, 196)    # --violet
+CORE_LIGHT = (255, 239, 217)
+
+# Same uneven lobe multipliers as the live orb's BASE_LOBES, frozen at a
+# single flattering phase — the icon is a still frame of the same character.
+LOBES = [1.0, 0.7, 1.16, 0.82, 1.05, 0.62, 0.93]
+N_LOBES = len(LOBES)
 
 
 def lerp(a, b, t):
@@ -28,16 +35,27 @@ def lerp(a, b, t):
 
 
 def mix(c1, c2, t):
-    return lerp(c1, c2, t)
+    return lerp(c1, c2, max(0.0, min(1.0, t)))
+
+
+def shape_radius(angle: float, r0: float) -> float:
+    """Smoothly interpolated radius at a given angle across the uneven lobes."""
+    a = angle % (2 * math.pi)
+    seg = a / (2 * math.pi) * N_LOBES
+    i0 = int(math.floor(seg)) % N_LOBES
+    i1 = (i0 + 1) % N_LOBES
+    t = seg - math.floor(seg)
+    t_smooth = t * t * (3 - 2 * t)  # smoothstep, keeps the outline organic
+    lobe = LOBES[i0] * (1 - t_smooth) + LOBES[i1] * t_smooth
+    return r0 * lobe
 
 
 def render(size: int, rounded: bool = True) -> Image.Image:
     ss = 4  # supersample
     S = size * ss
-    img = Image.new("RGBA", (S, S), CREAM + (255,))
+    img = Image.new("RGBA", (S, S), BG + (255,))
 
     if rounded:
-        # rounded-square mask
         mask = Image.new("L", (S, S), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
             [0, 0, S - 1, S - 1], radius=int(S * 0.225), fill=255
@@ -46,76 +64,74 @@ def render(size: int, rounded: bool = True) -> Image.Image:
         base.paste(img, (0, 0), mask)
         img = base
 
-    # --- orb body: radial gradient, offset towards top-left highlight -------
     cx, cy = S * 0.5, S * 0.5
-    r0 = S * 0.325            # orb radius
+    r0 = S * 0.30
+    hx, hy = cx - r0 * 0.30, cy - r0 * 0.42  # highlight sits up and to the left
+
+    # --- soft halo behind, fading well inside its own radius --------------
+    halo = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    hd = ImageDraw.Draw(halo)
+    hr = r0 * 1.35
+    hd.ellipse([cx - hr, cy - hr, cx + hr, cy + hr], fill=EMBER + (40,))
+    halo = halo.filter(ImageFilter.GaussianBlur(radius=S * 0.05))
+    img.alpha_composite(halo)
+
+    # --- the voice: an asymmetric ink-blot body ----------------------------
     orb = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     px = orb.load()
-    hx, hy = cx - r0 * 0.42, cy - r0 * 0.48
-    for y in range(int(cy - r0) - 2, int(cy + r0) + 4):
-        if y < 0 or y >= S:
-            continue
-        for x in range(int(cx - r0) - 2, int(cx + r0) + 4):
-            if x < 0 or x >= S:
-                continue
+    max_r = r0 * max(LOBES)
+    y0, y1 = max(0, int(cy - max_r) - 2), min(S, int(cy + max_r) + 3)
+    x0, x1 = max(0, int(cx - max_r) - 2), min(S, int(cx + max_r) + 3)
+    for y in range(y0, y1):
+        for x in range(x0, x1):
             dx, dy = x - cx, y - cy
             d = math.hypot(dx, dy)
-            if d > r0:
+            r_here = shape_radius(math.atan2(dy, dx), r0)
+            if d > r_here:
                 continue
-            # highlight falloff
+            t = d / r_here
             dh = math.hypot(x - hx, y - hy)
-            t_h = max(0.0, 1.0 - dh / (r0 * 1.25))
-            col = mix(PEACH, ACCENT, min(1.0, d / r0 * 1.15))
-            col = mix(col, ACCENT_DEEP, max(0.0, (d / r0 - 0.55)) * 1.4)
-            # lavender bleed on the right half
-            tx = (x - (cx - r0)) / (2 * r0)
-            fade = max(0.0, (tx - 0.55)) * 2.1
-            col = mix(col, LAVENDER, min(0.55, fade * (0.35 + 0.65 * d / r0)))
-            # warm highlight
-            col = mix(col, HILIGHT, t_h ** 2 * 0.72)
+            t_h = max(0.0, 1.0 - dh / (r0 * 1.1))
+
+            col = mix(GOLD, EMBER, min(1.0, t * 1.3))
+            col = mix(col, VIOLET, max(0.0, (t - 0.55)) * 1.6)
+            col = mix(col, CORE_LIGHT, (t_h ** 2) * 0.6)
+
             a = 255
-            edge = r0 - d
+            edge = r_here - d
             if edge < 2 * ss:
                 a = int(255 * max(0.0, edge / (2 * ss)))
             px[x, y] = col + (a,)
-
-    # --- soft halo behind ---------------------------------------------------
-    halo = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(halo)
-    hr = r0 * 1.30
-    hd.ellipse([cx - hr, cy - hr, cx + hr, cy + hr], fill=ACCENT + (46,))
-    halo = halo.filter(ImageFilter.GaussianBlur(radius=S * 0.055))
-    img.alpha_composite(halo)
-
-    # --- orbit rings + satellites ------------------------------------------
-    rings = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    rd = ImageDraw.Draw(rings)
-    for i, rr in enumerate((r0 * 1.14, r0 * 1.33)):
-        w = max(1, int(S * 0.006))
-        rd.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], outline=ACCENT + (74,), width=w)
-        ang = math.radians(-52 if i == 0 else 208)
-        dx_, dy_ = cx + rr * math.cos(ang), cy + rr * math.sin(ang)
-        dot = S * (0.030 if i == 0 else 0.020)
-        rd.ellipse([dx_ - dot, dy_ - dot, dx_ + dot, dy_ + dot], fill=ACCENT + (235,))
-        if i == 0:
-            ang2 = math.radians(148)
-            dx2, dy2 = cx + rr * math.cos(ang2), cy + rr * math.sin(ang2)
-            rd.ellipse([dx2 - dot * 0.62, dy2 - dot * 0.62, dx2 + dot * 0.62, dy2 + dot * 0.62],
-                       fill=(255, 200, 158, 235))
-    img.alpha_composite(rings)
     img.alpha_composite(orb)
 
     return img.resize((size, size), Image.LANCZOS)
 
 
+def write_favicon_svg() -> None:
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="g" cx="34%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="rgb{GOLD}"/>
+      <stop offset="55%" stop-color="rgb{EMBER}"/>
+      <stop offset="100%" stop-color="rgb{VIOLET}"/>
+    </radialGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="rgb{BG}"/>
+  <path fill="url(#g)" d="M16 5.2c3.3 3 5.6 5.7 5.6 8.9a5.6 5.6 0 0 1-6.3 5.6 5.2 5.2 0 0 1-4.8-6c.3-2.7 2.3-5.7 5.5-8.5Z"/>
+</svg>
+"""
+    with open(os.path.join(OUT, "favicon.svg"), "w") as f:
+        f.write(svg)
+
+
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
-    # Rounded-square app icons on cream, plus a transparent apple touch icon.
     render(192).convert("RGB").save(os.path.join(OUT, "icon-192.png"))
     render(512).convert("RGB").save(os.path.join(OUT, "icon-512.png"))
-    # maskable: same art, more padding (safe zone 80%)
+    # maskable: same art, the lobes already sit well inside the ~80% safe zone
     render(512).convert("RGB").save(os.path.join(OUT, "icon-maskable-512.png"))
     render(180).convert("RGB").save(os.path.join(OUT, "apple-touch-icon.png"))
+    write_favicon_svg()
     print("icons written to", os.path.realpath(OUT))
 
 
