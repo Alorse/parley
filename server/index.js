@@ -31,6 +31,19 @@ const MIME_TYPES = {
 
 let activeSessions = 0;
 
+// No build step means no content-hashed filenames, so any CDN/browser that
+// caches app.js or styles.css by URL alone can end up serving a stale file
+// alongside a fresh index.html after a release — a real incident: Cloudflare's
+// default edge cache for .js (4h TTL) once did exactly this and crashed the
+// app for real users. HTML and code always revalidate; only rarely-changing
+// binary assets (fonts/icons) get a real cache lifetime.
+function cacheControlFor(ext) {
+  if (ext === '.woff2' || ext === '.png' || ext === '.ico') {
+    return 'public, max-age=86400';
+  }
+  return 'no-cache';
+}
+
 async function serveStatic(req, res) {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
@@ -43,7 +56,10 @@ async function serveStatic(req, res) {
   try {
     const data = await readFile(fullPath);
     const ext = path.extname(fullPath);
-    res.writeHead(200, { 'content-type': MIME_TYPES[ext] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'content-type': MIME_TYPES[ext] || 'application/octet-stream',
+      'cache-control': cacheControlFor(ext),
+    });
     res.end(data);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain' });
