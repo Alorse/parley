@@ -5,7 +5,7 @@ to it out loud, it answers with real speech, shows the live transcript, and
 gives you a short pronunciation + grammar score after every turn. Built on the
 Gemini Live API.
 
-![Parley](assets/screenshot.png)
+<img src="assets/screenshot.png" width="320" alt="Parley">
 
 ## Run it locally
 
