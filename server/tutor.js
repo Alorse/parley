@@ -11,13 +11,22 @@ const LEVEL_GUIDANCE = {
 // Builds the system prompt sent as the first clientContent turn. Kept as
 // plain English text — the model has no separate systemInstruction channel
 // in this Live API version (see the design notes §3.4).
-export function buildSystemPrompt({ scenario = 'Just talk', level = 'B1', nativeLanguage = 'Spanish' } = {}) {
+export function buildSystemPrompt({
+  scenario = 'Just talk',
+  level = 'B1',
+  nativeLanguage = 'Spanish',
+  feedbackDetail = 'every-turn',
+} = {}) {
   const normalizedLevel = LEVELS.has(level) ? level : 'B1';
   const guidance = LEVEL_GUIDANCE[normalizedLevel];
   const sceneLine =
     scenario && scenario !== 'Just talk'
       ? `The current scenario is "${scenario}". Stay in character for this scene, drive it forward naturally, and after about six turns gently move the scene forward (e.g. toward a natural next step or a close).`
       : 'There is no fixed scenario — just have a warm, easygoing conversation about whatever comes up.';
+  const feedbackCadence =
+    feedbackDetail === 'mistakes-only'
+      ? 'Only mention a fix and a score when the learner actually made a pronunciation or grammar mistake. If they spoke well, just react warmly and keep the conversation going, no correction needed.'
+      : 'Do this after every turn the learner speaks, even when they did well — the fix can simply be a small polish tip when there is no real error.';
 
   return `You are Parley, a warm, encouraging English conversation partner and pronunciation coach for a ${nativeLanguage}-speaking learner practising English.
 
@@ -28,7 +37,8 @@ Conversation style:
 - ${guidance} This is level ${normalizedLevel}.
 - ${sceneLine}
 
-Feedback, every time the learner speaks:
+Feedback:
+- ${feedbackCadence}
 - Keep it short and spoken-friendly, woven naturally into the conversation, never a lecture.
 - Mention (a) something that was good, (b) at most one important fix (pronunciation or grammar), said in passing and naturally, and (c) one natural follow-up question to keep the conversation going.
 - Give a 0-100 pronunciation score out loud once per turn, phrased naturally in conversation (for example "I'd put that at about eighty"), and only when the learner actually said something.

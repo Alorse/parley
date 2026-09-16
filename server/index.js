@@ -145,7 +145,8 @@ wss.on('connection', (ws) => {
       const level = msg.level ?? profile.level ?? 'B1';
       const voice = msg.voice ?? profile.voice ?? config.tutorVoice;
       const halfDuplex = msg.halfDuplex ?? profile.halfDuplex ?? true;
-      store.write('profile', { scenario, level, voice, halfDuplex });
+      const feedbackDetail = msg.feedbackDetail ?? profile.feedbackDetail ?? 'every-turn';
+      store.write('profile', { scenario, level, voice, halfDuplex, feedbackDetail });
 
       session = new GeminiLiveSession({
         apiKey: config.googleApiKey,
@@ -154,6 +155,7 @@ wss.on('connection', (ws) => {
         scenario,
         level,
         halfDuplex,
+        feedbackDetail,
       });
 
       session.on('client', (clientMsg) => {

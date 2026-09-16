@@ -115,6 +115,7 @@ export class GeminiLiveSession extends EventEmitter {
     scenario = 'Just talk',
     level = 'B1',
     nativeLanguage = 'Spanish',
+    feedbackDetail = 'every-turn',
     halfDuplex = true,
     webSocketImpl = globalThis.WebSocket,
   }) {
@@ -125,14 +126,26 @@ export class GeminiLiveSession extends EventEmitter {
     this.scenario = scenario;
     this.level = level;
     this.nativeLanguage = nativeLanguage;
+    this.feedbackDetail = feedbackDetail;
     this.WebSocketImpl = webSocketImpl;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
+    // The persona/greeting turn is sent as soon as setup completes, before
+    // the learner has said anything. Close the mic gate immediately so any
+    // audio the client streams while getUserMedia/connect is still settling
+    // can't reach upstream and collide with that first turn's boundaries —
+    // it opens again after the greeting's turnComplete + tail guard, same
+    // as any other turn.
+    this.gate.onAssistantAudio();
     this.ws = null;
     this.closed = false;
     this.reconnectAttempted = false;
     this.turn = freshTurn();
     this._thinkingTimer = null;
     this._resumeTimer = null;
+    // Separate from gate._speaking (which starts pre-closed, see above) —
+    // tracks whether we've told the client we're in the 'speaking' state
+    // for the turn currently in flight.
+    this._speakingUi = false;
   }
 
   setHalfDuplex(enabled) {
@@ -173,7 +186,9 @@ export class GeminiLiveSession extends EventEmitter {
           settled = true;
           this._sendPersonaTurn();
           this._emitClient({ type: 'ready' });
-          this._emitClient({ type: 'state', value: 'listening' });
+          // No 'listening' state here: the persona turn is already in
+          // flight and will produce 'speaking' once its audio starts, then
+          // 'listening' once that greeting turn completes.
           resolve();
           return;
         }
@@ -214,6 +229,7 @@ export class GeminiLiveSession extends EventEmitter {
       scenario: this.scenario,
       level: this.level,
       nativeLanguage: this.nativeLanguage,
+      feedbackDetail: this.feedbackDetail,
     });
     this.turn.silent = true;
     this._sendUpstream(textUpstreamFrame(prompt));
@@ -262,6 +278,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.gate.onInterrupted();
     this._clearTimers();
     this.turn = freshTurn();
+    this._speakingUi = false;
     this._emitClient({ type: 'interrupted' });
     this._emitClient({ type: 'state', value: 'listening' });
   }
@@ -304,7 +321,8 @@ export class GeminiLiveSession extends EventEmitter {
     }
     if (gotAudio) {
       clearTimeout(this._thinkingTimer);
-      if (!this.gate._speaking) {
+      if (!this._speakingUi) {
+        this._speakingUi = true;
         this._emitClient({ type: 'state', value: 'speaking' });
       }
       this.gate.onAssistantAudio();
@@ -329,6 +347,7 @@ export class GeminiLiveSession extends EventEmitter {
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
     this.gate.onTurnComplete();
+    this._speakingUi = false;
 
     this._emitClient({ type: 'input-text', text: userText, final: true });
     this._emitClient({ type: 'output-text', text: assistantText, final: true });
