@@ -16,6 +16,7 @@ export interface ParleyConfig {
   accessTokens: string[];
   dataDir: string;
   maxSessions: number;
+  warmupEnabled: boolean;
   root: string;
 }
 
@@ -85,6 +86,7 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
       .filter(Boolean),
     dataDir: env.DATA_DIR || '.data',
     maxSessions: Number(env.MAX_SESSIONS) || 4,
+    warmupEnabled: env.WARMUP !== '0',
     root: ROOT,
   };
 }
@@ -103,6 +105,7 @@ function filterProcessEnv(): Record<string, string> {
     'ACCESS_TOKENS',
     'DATA_DIR',
     'MAX_SESSIONS',
+    'WARMUP',
   ];
   const out: Record<string, string> = {};
   for (const key of keys) {

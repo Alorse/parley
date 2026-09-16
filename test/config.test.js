@@ -35,6 +35,12 @@ test('buildConfig applies defaults when only the required key is set', () => {
   assert.equal(cfg.dataDir, '.data');
   assert.deepEqual(cfg.geminiLiveModelFallbacks, ['gemini-3.1-flash-live-preview']);
   assert.deepEqual(cfg.geminiTextModelFallbacks, ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.6-flash']);
+  assert.equal(cfg.warmupEnabled, true);
+});
+
+test('buildConfig disables warmup when WARMUP=0', () => {
+  const cfg = buildConfig({ GOOGLE_API_KEY: 'k', WARMUP: '0' });
+  assert.equal(cfg.warmupEnabled, false);
 });
 
 test('buildConfig overrides defaults from env', () => {

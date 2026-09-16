@@ -8,6 +8,7 @@ import { GeminiLiveSession, type ReviewRequestPayload } from './live.js';
 import { review, type ReviewParams } from './review.js';
 import { translate, hint, type TranslateParams, type HintParams } from './translate.js';
 import { JsonStore } from './store.js';
+import { warmUp } from './warmup.js';
 import type { ClientMessage, LiveEventMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
@@ -267,6 +268,11 @@ wss.on('connection', (ws) => {
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`Parley listening on http://127.0.0.1:${config.port}`);
+  // Fire-and-forget: don't hold up startup, and a failed warm-up must not
+  // affect anything else — see server/warmup.ts.
+  if (config.warmupEnabled) {
+    void warmUp({ apiKey: config.googleApiKey, models: TEXT_MODELS });
+  }
 });
 
 function shutdown() {
