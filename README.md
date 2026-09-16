@@ -150,6 +150,35 @@ daemon-reload`, `the service manager enable --now parley reverse proxy-parley`. 
 itself has no build step — `git pull && the service manager restart parley` is the
 whole update.
 
+**Note on the `/usr/bin/node` in that unit:** it is the system interpreter
+(v20 on this box) and it is *not* necessarily the `node` in your shell (v26
+via `.hermes/node`). Check the runtime before trusting a green local
+test — `node --test test/` can pass on v26 while the service dies on v20.
+Run `/usr/bin/node --test test/` as well.
+
+### Releasing without serving a stale asset
+
+Cloudflare fronts this hostname and caches `.js`/`.css`/`.html` by URL for up
+to 4 hours, overriding the origin's `Cache-Control`. Because a change to
+`styles.css` or `app.js` reaches the same URL, the edge can pair a *fresh*
+`index.html` with a *stale* stylesheet — which is exactly what happened once
+in production. The defence is a version query on the entry assets:
+
+1. bump `?v=N` on `/styles.css` and `/app.js` in `public/index.html`, and on
+   the `serviceWorker.register('/sw.js?v=N')` call in `public/app.js`;
+2. bump `CACHE_NAME` in `public/sw.js` (`parley-vN`) — that is what evicts a
+   previous release from installed clients;
+3. `the service manager restart parley`, then verify the edge is not stale:
+
+```bash
+o=$(curl -s http://127.0.0.1:8322/app.js | sha256sum)
+e=$(curl -s https://localhost/app.js?v=3 | sha256sum)   # must match
+```
+
+A device that already had the previous service worker picks up the new build
+on its **second** load (the first navigation is still served by the old
+worker, which installs the new one).
+
 ## Repo layout
 
 ```
