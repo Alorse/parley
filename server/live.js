@@ -115,7 +115,7 @@ function freshTurn() {
 }
 
 // One upstream Live session per browser WebSocket connection. Emits 'client'
-// events shaped exactly like the server->client protocol in the design notes §7, and
+// events shaped exactly like the documented server->client protocol, and
 // 'review-request' when a non-silent turn completes (index.js wires that to
 // server/review.js).
 export class GeminiLiveSession extends EventEmitter {

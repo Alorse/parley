@@ -20,8 +20,6 @@ finished turn into a structured review (score, corrections, words).
 - `public/` — plain browser ES modules. No bundler, no framework, no TypeScript.
 - `server/` — plain Node ESM. `node server/index.js` is the whole runtime.
 - `DESIGN.md` — the visual identity ("Afterglow") and why it is what it is.
-- `the design notes` — the build record: wire protocol, tutor persona rules, design
-  tokens, definition of done.
 
 ## Environment variables (`.env`)
 

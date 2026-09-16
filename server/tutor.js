@@ -10,7 +10,7 @@ const LEVEL_GUIDANCE = {
 
 // Builds the system prompt sent as the first clientContent turn. Kept as
 // plain English text — the model has no separate systemInstruction channel
-// in this Live API version (see the design notes §3.4).
+// in this Live API version.
 export function buildSystemPrompt({
   scenario = 'Just talk',
   level = 'B1',

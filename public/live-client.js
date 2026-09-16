@@ -1,4 +1,4 @@
-// Thin WebSocket client for the /live protocol in the design notes §7. Emits a
+// Thin WebSocket client for the /live protocol. Emits a
 // 'message' CustomEvent (detail = the parsed server message) and a 'close'
 // event; app.js does all of the interpretation.
 export class LiveClient extends EventTarget {
