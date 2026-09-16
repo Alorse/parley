@@ -137,7 +137,7 @@ svg {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
-  padding: 18px 20px calc(96px + env(safe-area-inset-bottom, 0px));
+  padding: 18px 20px calc(120px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Talk screen: the header stays pinned to the top; everything else (the
@@ -569,6 +569,31 @@ svg {
   margin-top: 24px;
 }
 
+/* Words screen, no words saved yet: balanced vertically (auto margins,
+   same technique as the Talk stage) instead of one big note stranded near
+   the top with dead space below, and a clear way forward. */
+.words-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  margin: auto 0;
+  padding: 12px 0;
+}
+
+.words-empty .empty-note {
+  margin-top: 0;
+}
+
+/* Combined with .just-talk-pill so specificity wins regardless of source
+   order, instead of relying on cascade position against that shared rule. */
+.just-talk-pill.words-empty-cta {
+  width: auto;
+  margin-bottom: 0;
+  padding: 14px 26px;
+  justify-content: center;
+}
+
 /* --------------------------------------------------------------------- */
 /* Themes screen                                                          */
 /* --------------------------------------------------------------------- */
@@ -633,7 +658,12 @@ svg {
   min-height: 138px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  /* Top-anchored, not space-between: with space-between, a card whose
+     subtitle wraps to two lines pushed its icon+title noticeably higher
+     than a neighbor with a one-line subtitle, so titles never lined up
+     across a row. Top-anchoring keeps every icon/title at the same
+     position regardless of how long the subtitle is. */
+  justify-content: flex-start;
   text-align: left;
   color: var(--ink);
   border: 1px solid var(--hairline);
@@ -787,6 +817,20 @@ svg {
 /* Bottom nav — a flush tab bar, not a floating pill                     */
 /* --------------------------------------------------------------------- */
 
+/* A soft fade for scrollable screens so content is never seen ending
+   abruptly right at the nav — content still stops well above it (see the
+   screen's reserved bottom padding), this is a visual cue, not a clip. */
+.nav-scrim {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+  height: 36px;
+  background: linear-gradient(to bottom, rgba(24, 19, 32, 0), var(--bg));
+  pointer-events: none;
+  z-index: 15;
+}
+
 .tab-nav {
   position: fixed;
   left: 0;
@@ -815,25 +859,12 @@ svg {
   font-size: 11px;
   color: var(--ink-faint);
   min-height: 44px;
-  position: relative;
 }
 
 .tab-btn svg { width: 24px; height: 24px; }
 
 .tab-btn[aria-current="page"] {
   color: var(--ember);
-}
-
-.tab-btn[aria-current="page"]::before {
-  content: '';
-  position: absolute;
-  top: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--ember);
 }
 
 /* --------------------------------------------------------------------- */

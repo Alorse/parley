@@ -1,6 +1,6 @@
 import { iconMarkup } from './icons.js';
 import { Orb, MicWaveform } from './orb.js';
-import { SCENARIOS, SCENARIO_CATEGORIES, JUST_TALK, masteryTier, recordWordSighting, searchWords } from './data.js';
+import { SCENARIOS, SCENARIO_CATEGORIES, JUST_TALK, masteryTier, recordWordSighting, searchWords, getAllWords } from './data.js';
 import { LiveClient } from './live-client.js';
 import { AudioCapture } from './audio-capture.js';
 import { AudioPlayer } from './audio-player.js';
@@ -512,7 +512,23 @@ function renderWords() {
         </button>`;
     })
     .join('');
+
+  const hasAnyWords = getAllWords().length > 0;
   el('words-empty').classList.toggle('hidden', words.length > 0);
+  // The mastery legend only means something once at least one word exists —
+  // showing it (and the CTA) over an empty library either way.
+  el('word-legend').classList.toggle('hidden', !hasAnyWords);
+  el('word-footnote').classList.toggle('hidden', !hasAnyWords);
+
+  if (words.length === 0) {
+    if (hasAnyWords) {
+      el('words-empty-text').textContent = 'No words match that search.';
+      el('words-empty-cta').classList.add('hidden');
+    } else {
+      el('words-empty-text').textContent = 'Start a conversation and your words will show up here.';
+      el('words-empty-cta').classList.remove('hidden');
+    }
+  }
 
   el('word-list').querySelectorAll('.word-row').forEach((row) => {
     row.addEventListener('click', () => {
@@ -522,6 +538,8 @@ function renderWords() {
     });
   });
 }
+
+el('words-empty-cta').addEventListener('click', () => showScreen('talk'));
 
 el('words-search').addEventListener('input', (e) => {
   state.wordsQuery = e.target.value;
@@ -599,7 +617,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=2').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=3').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

@@ -16,7 +16,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="/styles.css?v=2" />
+<link rel="stylesheet" href="/styles.css?v=3" />
 </head>
 <body>
 <div id="app" class="app">
@@ -125,16 +125,24 @@
     <p class="screen-subtitle">Words that came up in your conversations.</p>
 
     <div id="word-list" class="word-list"></div>
-    <p id="words-empty" class="empty-note hidden">Start a conversation and your words will show up here.</p>
 
-    <div class="word-legend">
+    <div id="words-empty" class="words-empty hidden">
+      <p id="words-empty-text" class="empty-note">Start a conversation and your words will show up here.</p>
+      <button id="words-empty-cta" class="just-talk-pill words-empty-cta" type="button">
+        <span data-icon="waveform"></span>
+        <span>Start a conversation</span>
+      </button>
+    </div>
+
+    <div id="word-legend" class="word-legend hidden">
       <span><span class="legend-dot legend-dot--1"></span>1 · Fragile</span>
       <span><span class="legend-dot legend-dot--2"></span>2 · Growing</span>
       <span><span class="legend-dot legend-dot--3"></span>3 · Steady</span>
     </div>
-    <p class="word-footnote">The bars estimate how often you have used a word in conversation, not permanent mastery.</p>
+    <p id="word-footnote" class="word-footnote hidden">The bars estimate how often you have used a word in conversation, not permanent mastery.</p>
   </main>
 
+  <div class="nav-scrim" aria-hidden="true"></div>
   <nav class="tab-nav" aria-label="Screens">
     <button class="tab-btn" data-tab="talk" type="button" aria-current="page"><span data-icon="waveform"></span>Talk</button>
     <button class="tab-btn" data-tab="themes" type="button"><span data-icon="grid"></span>Themes</button>
@@ -204,6 +212,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=2"></script>
+<script type="module" src="/app.js?v=3"></script>
 </body>
 </html>
