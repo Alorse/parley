@@ -599,7 +599,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=2').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

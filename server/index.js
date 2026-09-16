@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
@@ -56,11 +57,22 @@ async function serveStatic(req, res) {
   try {
     const data = await readFile(fullPath);
     const ext = path.extname(fullPath);
-    res.writeHead(200, {
+    const headers = {
       'content-type': MIME_TYPES[ext] || 'application/octet-stream',
       'cache-control': cacheControlFor(ext),
-    });
-    res.end(data);
+      // A validator lets an intermediary (Cloudflare) revalidate a cached
+      // copy instead of serving it until its TTL runs out, which is how a
+      // release can otherwise be served stale for hours.
+      etag: `"${createHash('sha1').update(data).digest('hex').slice(0, 32)}"`,
+    };
+    if (req.headers['if-none-match'] === headers.etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { ...headers, 'content-length': data.length });
+    // HEAD must not carry a body (curl -I, health checkers, link previews).
+    res.end(req.method === 'HEAD' ? undefined : data);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('Not found');
@@ -116,7 +128,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === 'GET') {
+    if (req.method === 'GET' || req.method === 'HEAD') {
       await serveStatic(req, res);
       return;
     }
