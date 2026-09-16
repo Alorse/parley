@@ -686,6 +686,12 @@ el('save-words-toggle').addEventListener('click', () => {
   updateSetting('saveWords', on);
 });
 
+el('forget-btn').addEventListener('click', () => {
+  if (!window.confirm("Forget everything Parley remembers about you? This clears your name and what it knows from past conversations — it can't be undone.")) return;
+  state.profile = forgetProfile();
+  renderSettingsSheet();
+});
+
 function openSettingsSheet() {
   renderSettingsSheet();
   el('settings-sheet').classList.remove('hidden');
@@ -711,7 +717,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=5').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=6').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });
