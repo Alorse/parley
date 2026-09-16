@@ -332,6 +332,14 @@ export class GeminiLiveSession extends EventEmitter {
     this.gate.setEnabled(enabled);
   }
 
+  // Called once index.ts's review-request handler comes back with a
+  // freshly captured name, so the rest of this session's review requests
+  // stop asking the model to extract one all over again (see
+  // buildReviewPrompt's nameInstruction).
+  setLearnerName(name: string): void {
+    this.learnerName = name;
+  }
+
   setScenario(scenario: string): void {
     this.scenario = scenario;
   }

@@ -17,26 +17,36 @@ export const SCENARIO_CATEGORIES = ['All', 'Everyday', 'Work', 'Travel', 'Social
 
 export const JUST_TALK = 'Just talk';
 
+// --- localStorage JSON helper, shared by the stores below ----------------
+
+function loadJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? { ...fallback, ...JSON.parse(raw) } : { ...fallback };
+  } catch {
+    return { ...fallback };
+  }
+}
+
+function saveJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage full or unavailable — the app still works, we just won't
+    // persist this value.
+  }
+}
+
 // --- word store --------------------------------------------------------
 
 const WORDS_KEY = 'parley.words.v1';
 
 function loadWordStore() {
-  try {
-    const raw = localStorage.getItem(WORDS_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  return loadJson(WORDS_KEY, {});
 }
 
 function saveWordStore(store) {
-  try {
-    localStorage.setItem(WORDS_KEY, JSON.stringify(store));
-  } catch {
-    // storage full or unavailable — the conversation still works, we just
-    // won't remember this word.
-  }
+  saveJson(WORDS_KEY, store);
 }
 
 export function masteryTier(count) {
@@ -83,28 +93,21 @@ const PROFILE_KEY = 'parley-profile-v1';
 const DEFAULT_PROFILE = { name: '' };
 
 function loadProfile() {
-  try {
-    const raw = localStorage.getItem(PROFILE_KEY);
-    return raw ? { ...DEFAULT_PROFILE, ...JSON.parse(raw) } : { ...DEFAULT_PROFILE };
-  } catch {
-    return { ...DEFAULT_PROFILE };
-  }
+  return loadJson(PROFILE_KEY, DEFAULT_PROFILE);
 }
 
 function saveProfile(profile) {
-  try {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-  } catch {
-    // storage full or unavailable — the profile just won't persist this session
-  }
+  saveJson(PROFILE_KEY, profile);
 }
 
 export function getProfile() {
   return loadProfile();
 }
 
-export function setProfileName(name) {
-  const profile = loadProfile();
+// Takes the caller's already-loaded profile rather than re-reading storage —
+// app.js always has one in memory (from getProfile() at boot) by the time it
+// needs to update the name.
+export function setProfileName(profile, name) {
   profile.name = (name || '').trim();
   saveProfile(profile);
   return profile;

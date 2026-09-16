@@ -223,6 +223,7 @@ wss.on('connection', (ws) => {
           try {
             const result = await review({ ...turn, apiKey: config.googleApiKey, models: TEXT_MODELS });
             if (result.corrections.length > 0) candidate.armSilenceNudge();
+            if (result.name) candidate.setLearnerName(result.name);
             if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'review', ...result }));
           } catch (err) {
             console.error('review failed:', errorMessage(err));

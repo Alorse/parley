@@ -192,14 +192,14 @@ test('buildReviewPrompt asks the model to extract the learner\'s name when it is
   assert.doesNotMatch(prompt, /already known/i);
 });
 
-test('buildReviewPrompt tells the model to leave name empty once it is already known', () => {
+test('buildReviewPrompt says nothing about name capture once the name is already known — nothing left to ask for', () => {
   const prompt = buildReviewPrompt({ user: 'Hello again', level: 'B1', learnerName: 'Kenji' });
-  assert.match(prompt, /already known/i);
-  assert.match(prompt, /leave "name" as an empty string/i);
+  assert.doesNotMatch(prompt, /states their own name/i);
+  assert.doesNotMatch(prompt, /"name"/);
 });
 
-test('review() forwards learnerName into the prompt sent to the model', async () => {
-  let sentPrompt = '';
+test('review() drops the "name" field from the response schema once learnerName is already known, saving a wasted extraction on every later turn', async () => {
+  let sentSchema;
   const payload = {
     understood: true,
     score: 70,
@@ -207,7 +207,6 @@ test('review() forwards learnerName into the prompt sent to the model', async ()
     corrections: [],
     tip: 'ok',
     words: [],
-    name: '',
   };
   await review({
     user: 'hello again',
@@ -217,11 +216,37 @@ test('review() forwards learnerName into the prompt sent to the model', async ()
     apiKey: 'unused',
     model: 'unused',
     fetchImpl: async (_url, opts) => {
-      sentPrompt = JSON.parse(opts.body).contents[0].parts[0].text;
+      sentSchema = JSON.parse(opts.body).generationConfig.responseSchema;
       return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }) };
     },
   });
-  assert.match(sentPrompt, /already known/i);
+  assert.equal('name' in sentSchema.properties, false);
+  assert.equal(sentSchema.required.includes('name'), false);
+});
+
+test('review() keeps the "name" field in the response schema when learnerName is not yet known', async () => {
+  let sentSchema;
+  const payload = {
+    understood: true,
+    score: 70,
+    scores: { pronunciation: 70, grammar: 70, fluency: 70 },
+    corrections: [],
+    tip: 'ok',
+    words: [],
+    name: 'Kenji',
+  };
+  await review({
+    user: "I'm Kenji",
+    assistant: '',
+    level: 'B1',
+    apiKey: 'unused',
+    model: 'unused',
+    fetchImpl: async (_url, opts) => {
+      sentSchema = JSON.parse(opts.body).generationConfig.responseSchema;
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }) };
+    },
+  });
+  assert.equal(sentSchema.required.includes('name'), true);
 });
 
 test('review() throws when the upstream request fails', async () => {

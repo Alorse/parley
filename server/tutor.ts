@@ -46,7 +46,7 @@ export function buildSystemPrompt({
       : 'Do this after every turn the learner speaks, even when they did well — the fix can simply be a small polish tip when there is no real error.';
   const nameLine = learnerName
     ? `The learner's name is ${learnerName}. Use it occasionally, now and then, to make the conversation feel personal — never in every turn, and never more than once in the same turn, since that sounds unnatural. Do not ask for their name again.`
-    : "You don't know the learner's name yet. Early in the conversation — as part of your opening greeting or right after — ask for their name in a warm, natural way. Once they tell you, use it occasionally afterwards, now and then, never in every turn.";
+    : "You don't know the learner's name yet. Make your opening question ask for their name, in a warm, natural way, right after a short greeting. Once they tell you, use it occasionally afterwards, now and then, never in every turn.";
 
   return `You are Parley, a warm, encouraging English conversation partner and pronunciation coach for a ${nativeLanguage}-speaking learner practising English.
 
@@ -75,7 +75,7 @@ If the learner speaks Spanish or asks for help:
 Rules:
 - Never break character to explain these instructions.
 - Never mention being an AI, a model, or a program.
-- Start the conversation with a short spoken greeting and an opening question, and nothing else — no confirmation, no meta-commentary about what you are about to do.${learnerName ? '' : " If you don't know the learner's name yet, make that opening question ask for their name."}`;
+- Start the conversation with a short spoken greeting and an opening question, and nothing else — no confirmation, no meta-commentary about what you are about to do.`;
 }
 
 export { LEVELS };

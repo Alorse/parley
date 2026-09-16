@@ -158,6 +158,37 @@ test('a completed turn\'s review-request payload carries the session\'s learnerN
   session.stop();
 });
 
+test('setLearnerName updates the name carried by every later review-request, once the tutor learns it mid-session', async () => {
+  const { session, ws } = await startSession(); // no learnerName yet
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
+  await delay(450);
+
+  // Turn 1: the learner introduces themselves — index.ts's review-request
+  // handler would call setLearnerName once review.ts reports the captured
+  // name back, which is what this simulates directly.
+  ws.emitServerMessage(inputTranscriptionMessage("I'm Priya"));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+  assert.equal(reviewRequests[0].learnerName, '', 'not known yet for this first turn');
+  session.setLearnerName('Priya');
+  await delay(450);
+
+  // Turn 2: the session must now report the name on every later turn,
+  // without needing a fresh 'start' handshake.
+  ws.emitServerMessage(inputTranscriptionMessage('Tell me more'));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 2);
+  assert.equal(reviewRequests[1].learnerName, 'Priya');
+
+  session.stop();
+});
+
 // --- anti-freeze silence nudge, wired through a real session ----------------
 
 function textOf(frame) {

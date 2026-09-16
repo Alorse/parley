@@ -256,7 +256,7 @@ function handleReview(msg) {
   // (see review.ts's nameInstruction), so this can't clobber a name the
   // learner set by hand in Settings.
   if (msg.name && !state.profile.name) {
-    state.profile = setProfileName(msg.name);
+    state.profile = setProfileName(state.profile, msg.name);
   }
 }
 
@@ -631,7 +631,7 @@ el('half-duplex-toggle').addEventListener('click', () => {
 });
 
 el('name-input').addEventListener('change', (e) => {
-  state.profile = setProfileName(e.target.value);
+  state.profile = setProfileName(state.profile, e.target.value);
   e.target.value = state.profile.name;
 });
 
