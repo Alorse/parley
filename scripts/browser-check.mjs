@@ -21,6 +21,7 @@ import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateFakeMic } from './make-fake-mic.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -34,6 +35,12 @@ const mobile = !args.includes('--desktop'); // Parley is phone-first; default to
 const secondsFlagIndex = args.indexOf('--seconds');
 const seconds = secondsFlagIndex !== -1 ? Number(args[secondsFlagIndex + 1]) || 45 : 45;
 
+// The WAV is generated, not committed (see make-fake-mic.mjs) — build it on
+// demand the first time, or whenever it's missing.
+if (!existsSync(wav) && path.resolve(wav) === path.join(ROOT, 'test/fixtures/fake-mic.wav')) {
+  console.log('fake-mic WAV not found, generating it from test/fixtures/speech.pcm...');
+  generateFakeMic();
+}
 if (!existsSync(wav)) {
   console.error(`fake-mic WAV not found: ${wav}`);
   process.exit(2);

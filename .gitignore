@@ -13,3 +13,6 @@ credentials*.json
 .data/
 tmp/
 .DS_Store
+
+# Generated fixtures (deterministically rebuilt — see scripts/make-fake-mic.mjs)
+test/fixtures/fake-mic.wav

@@ -90,6 +90,9 @@ npm run browser-check   # real headless Chrome: launches with a FAKE MICROPHONE
             # Proves getUserMedia, AudioWorklet, canvas rendering and the
             # websocket session work in a real browser, which the other two
             # cannot (they never load a page).
+            # The fake-mic WAV isn't committed — it's built on demand by
+            # scripts/make-fake-mic.mjs from the already-cached
+            # test/fixtures/speech.pcm padded with silence.
             # Usage: node scripts/browser-check.mjs [url] [wav] [outdir]
             #   [--mobile|--desktop] [--seconds N]
 ```
@@ -146,7 +149,8 @@ server/    config.js, tutor.js, live.js, review.js, translate.js,
 public/    index.html, styles.css, app.js, live-client.js, audio-capture.js,
            pcm-worklet.js, audio-player.js, orb.js, icons.js, data.js,
            manifest.webmanifest, sw.js, icons/, fonts/
-scripts/   make_icons.py, e2e-live.mjs, browser-check.mjs
-test/      *.test.js, fixtures/speech.pcm, fixtures/fake-mic.wav
+scripts/   make_icons.py, e2e-live.mjs, browser-check.mjs, make-fake-mic.mjs
+test/      *.test.js, fixtures/speech.pcm (fixtures/fake-mic.wav is generated,
+           not committed — see scripts/make-fake-mic.mjs)
 assets/    screenshot.png
 ```
