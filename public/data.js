@@ -73,3 +73,39 @@ export function searchWords(query) {
   const q = query.trim().toLowerCase();
   return all.filter((w) => w.word.toLowerCase().includes(q) || w.meaning.toLowerCase().includes(q));
 }
+
+// --- learner profile ----------------------------------------------------
+// Small and separate from the settings blob on purpose: this is where
+// whatever the app learns about the learner themselves lives (starting with
+// their name), as opposed to how they've configured the app.
+
+const PROFILE_KEY = 'parley-profile-v1';
+const DEFAULT_PROFILE = { name: '' };
+
+function loadProfile() {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    return raw ? { ...DEFAULT_PROFILE, ...JSON.parse(raw) } : { ...DEFAULT_PROFILE };
+  } catch {
+    return { ...DEFAULT_PROFILE };
+  }
+}
+
+function saveProfile(profile) {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch {
+    // storage full or unavailable — the profile just won't persist this session
+  }
+}
+
+export function getProfile() {
+  return loadProfile();
+}
+
+export function setProfileName(name) {
+  const profile = loadProfile();
+  profile.name = (name || '').trim();
+  saveProfile(profile);
+  return profile;
+}
