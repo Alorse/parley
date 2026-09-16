@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en" style="color-scheme: light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Parley — English speaking tutor</title>
+<meta name="description" content="Voice-first English speaking practice with a warm, patient tutor." />
+<meta name="theme-color" content="#F7F0E4" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Parley" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="icon" href="/icons/icon-192.png" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<link rel="preload" href="/fonts/the previous font-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- ============================ Talk screen ============================ -->
+  <main id="screen-talk" class="screen screen-talk" data-screen="talk">
+    <header class="app-header">
+      <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
+      <button id="settings-btn" class="icon-btn" type="button" aria-label="Settings" data-icon="settings"></button>
+    </header>
+
+    <div id="topic-chip" class="topic-chip hidden"></div>
+
+    <div class="orb-wrap">
+      <canvas id="orb-canvas" class="orb-canvas"></canvas>
+    </div>
+
+    <p id="status-line" class="status-line">Ready when you are</p>
+    <canvas id="waveform-canvas" class="waveform-canvas hidden" aria-hidden="true"></canvas>
+
+    <section id="transcript" class="transcript" aria-live="polite">
+      <p id="empty-prompt" class="empty-prompt">Tap the microphone and say hello</p>
+      <p id="tutor-line" class="tutor-line hidden"></p>
+      <p id="tutor-translation" class="tutor-translation hidden"></p>
+      <p id="user-line" class="user-line hidden"><span class="you-label">You</span><span id="user-line-text"></span></p>
+    </section>
+
+    <button id="score-pill" class="score-pill hidden" type="button">
+      <span class="score-ring">
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <path class="score-ring-bg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
+          <path id="score-ring-fg" class="score-ring-fg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
+        </svg>
+        <span id="score-value" class="score-value">0</span>
+      </span>
+      <span id="score-tip" class="score-tip"></span>
+    </button>
+
+    <div class="controls-row">
+      <div class="control">
+        <button id="meaning-btn" class="control-btn control-btn--butter" type="button" aria-label="Meaning" data-icon="bubble"></button>
+        <span class="control-label">Meaning</span>
+      </div>
+      <button id="mic-btn" class="mic-btn" type="button" aria-label="Toggle microphone" data-icon="mic"></button>
+      <div class="control">
+        <button id="end-btn" class="control-btn control-btn--cream" type="button" aria-label="End" data-icon="hangup"></button>
+        <span class="control-label">End</span>
+      </div>
+    </div>
+
+    <p id="mic-status" class="mic-status">Microphone off</p>
+    <div class="quiet-actions">
+      <button id="type-instead-btn" class="quiet-btn" type="button"><span data-icon="keyboard"></span>Type instead</button>
+      <button id="hint-btn" class="quiet-btn" type="button"><span data-icon="sparkles"></span>A little help</button>
+    </div>
+
+    <form id="type-form" class="type-form hidden">
+      <input id="type-input" class="type-input" type="text" placeholder="Type what you want to say…" autocomplete="off" />
+      <button class="type-send" type="submit" aria-label="Send" data-icon="arrowUpRight"></button>
+    </form>
+
+    <div id="error-card" class="error-card hidden" role="alert">
+      <p id="error-message"></p>
+      <button id="error-dismiss" class="quiet-btn" type="button">Dismiss</button>
+    </div>
+  </main>
+
+  <!-- ============================ Themes screen =========================== -->
+  <main id="screen-themes" class="screen screen-themes hidden" data-screen="themes">
+    <header class="app-header">
+      <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
+      <button class="icon-btn settings-btn-alt" type="button" aria-label="Settings" data-icon="settings"></button>
+    </header>
+
+    <div class="search-pill">
+      <span data-icon="search"></span>
+      <input id="themes-search" type="text" placeholder="Find a conversation" autocomplete="off" />
+    </div>
+
+    <p class="eyebrow">A PLACE TO BEGIN</p>
+    <h1 class="screen-heading">What's on your mind?</h1>
+    <p class="screen-subtitle">Same tutor, somewhere new.</p>
+
+    <button id="just-talk-btn" class="just-talk-pill" type="button">
+      <span data-icon="waveform"></span>
+      <span>Just talk</span>
+      <span class="just-talk-arrow" data-icon="arrowUpRight"></span>
+    </button>
+
+    <div id="theme-filters" class="filter-chips"></div>
+    <div id="theme-grid" class="theme-grid"></div>
+    <p id="theme-empty" class="empty-note hidden">No conversations match that search.</p>
+  </main>
+
+  <!-- ============================ Words screen ============================ -->
+  <main id="screen-words" class="screen screen-words hidden" data-screen="words">
+    <header class="app-header">
+      <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
+      <button class="icon-btn settings-btn-alt" type="button" aria-label="Settings" data-icon="settings"></button>
+    </header>
+
+    <div class="search-pill">
+      <span data-icon="search"></span>
+      <input id="words-search" type="text" placeholder="Find a word" autocomplete="off" />
+    </div>
+
+    <p class="eyebrow">LITTLE BY LITTLE · ENGLISH</p>
+    <h1 class="screen-heading">Your words.</h1>
+    <p class="screen-subtitle">Words that came up in your conversations.</p>
+
+    <div id="word-list" class="word-list"></div>
+    <p id="words-empty" class="empty-note hidden">Start a conversation and your words will show up here.</p>
+
+    <div class="word-legend">
+      <span><span class="legend-dot legend-dot--1"></span>1 · Fragile</span>
+      <span><span class="legend-dot legend-dot--2"></span>2 · Growing</span>
+      <span><span class="legend-dot legend-dot--3"></span>3 · Steady</span>
+    </div>
+    <p class="word-footnote">The bars estimate how often you have used a word in conversation, not permanent mastery.</p>
+  </main>
+
+  <nav class="tab-nav" aria-label="Screens">
+    <button class="tab-btn" data-tab="talk" type="button" aria-current="page"><span data-icon="waveform"></span>Talk</button>
+    <button class="tab-btn" data-tab="themes" type="button"><span data-icon="grid"></span>Themes</button>
+    <button class="tab-btn" data-tab="words" type="button"><span data-icon="book"></span>Words</button>
+  </nav>
+</div>
+
+<!-- ============================ Settings sheet ============================ -->
+<div id="settings-sheet" class="sheet-overlay hidden">
+  <div class="sheet" role="dialog" aria-label="Settings">
+    <div class="sheet-handle"></div>
+    <h2 class="sheet-title">Settings</h2>
+
+    <div class="field-group">
+      <span class="field-label">Voice</span>
+      <div id="voice-options" class="pill-options" data-field="voice"></div>
+    </div>
+
+    <div class="field-group">
+      <span class="field-label">Level</span>
+      <div id="level-options" class="pill-options" data-field="level"></div>
+    </div>
+
+    <div class="field-group field-row">
+      <div>
+        <span class="field-label">Interruptions</span>
+        <p class="field-hint">Let you talk over the tutor (hands-free).</p>
+      </div>
+      <button id="half-duplex-toggle" class="toggle" type="button" role="switch" aria-checked="false"></button>
+    </div>
+
+    <div class="field-group">
+      <span class="field-label">Feedback</span>
+      <div id="feedback-options" class="pill-options" data-field="feedbackDetail"></div>
+    </div>
+
+    <div class="field-group field-row">
+      <div>
+        <span class="field-label">Save my words</span>
+        <p class="field-hint">Keep new words in your Words list.</p>
+      </div>
+      <button id="save-words-toggle" class="toggle" type="button" role="switch" aria-checked="true"></button>
+    </div>
+
+    <div class="field-group">
+      <span class="field-label">Text size</span>
+      <div id="text-size-options" class="pill-options" data-field="textSize"></div>
+    </div>
+
+    <div class="about-block">
+      <p><strong>Parley</strong> is a voice-first English speaking tutor.</p>
+      <p>Practice out loud, get gentle feedback, and build your own word list — one conversation at a time.</p>
+    </div>
+
+    <button id="settings-close" class="just-talk-pill sheet-close" type="button">Done</button>
+  </div>
+</div>
+
+<!-- ============================ Score detail sheet ========================= -->
+<div id="score-sheet" class="sheet-overlay hidden">
+  <div class="sheet" role="dialog" aria-label="Turn feedback">
+    <div class="sheet-handle"></div>
+    <h2 class="sheet-title">How that sounded</h2>
+    <div id="score-breakdown" class="score-breakdown"></div>
+    <div id="corrections-list" class="corrections-list"></div>
+    <button id="score-sheet-close" class="just-talk-pill sheet-close" type="button">Done</button>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
