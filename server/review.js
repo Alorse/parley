@@ -65,8 +65,12 @@ Judge pronunciation, grammar, and fluency only from the learner's transcript abo
 Respond with JSON matching the required schema: an overall 0-100 score, per-category scores (pronunciation, grammar, fluency), at most 3 corrections (from/to/why), one short actionable pronunciation tip, and 0-4 notable words worth saving (word + short English meaning).`;
 }
 
-// Pure parsing/validation of the model's JSON text, so it is unit-testable
-// without a network call.
+/**
+ * Pure parsing/validation of the model's JSON text, so it is unit-testable
+ * without a network call.
+ * @param {string} rawJsonText
+ * @param {{ user?: string }} [options]
+ */
 export function parseReviewPayload(rawJsonText, { user } = {}) {
   const data = JSON.parse(rawJsonText);
   const clamp = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));

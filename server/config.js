@@ -5,9 +5,14 @@ import path from 'node:path';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = path.join(ROOT, '.env');
 
-// Minimal .env parser: KEY=VALUE per line, '#' comments, blank lines ignored.
-// No quoting/escaping support — matches the simple values this project needs.
+/**
+ * Minimal .env parser: KEY=VALUE per line, '#' comments, blank lines ignored.
+ * No quoting/escaping support — matches the simple values this project needs.
+ * @param {string} text
+ * @returns {Record<string, string>}
+ */
 export function parseEnv(text) {
+  /** @type {Record<string, string>} */
   const out = {};
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
@@ -27,6 +32,7 @@ export function parseEnv(text) {
   return out;
 }
 
+/** @returns {Record<string, string>} */
 function loadEnvFile() {
   try {
     return parseEnv(readFileSync(ENV_PATH, 'utf8'));
@@ -46,6 +52,7 @@ function parseModelList(value, defaults) {
   return parsed.length ? parsed : defaults;
 }
 
+/** @param {Record<string, string>} [env] */
 export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
   const googleApiKey = env.GOOGLE_API_KEY || '';
   if (!googleApiKey) {
@@ -75,6 +82,7 @@ export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
 
 // process.env only overrides file values for keys that are actually set,
 // so an empty shell env doesn't blank out .env values.
+/** @returns {Record<string, string>} */
 function filterProcessEnv() {
   const keys = [
     'GOOGLE_API_KEY',
@@ -88,6 +96,7 @@ function filterProcessEnv() {
     'DATA_DIR',
     'MAX_SESSIONS',
   ];
+  /** @type {Record<string, string>} */
   const out = {};
   for (const key of keys) {
     if (process.env[key] !== undefined) out[key] = process.env[key];

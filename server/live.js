@@ -174,6 +174,12 @@ export class GeminiLiveSession extends EventEmitter {
   _connect() {
     return new Promise((resolve, reject) => {
       let settled = false;
+      // `this.WebSocketImpl` is either the DOM/undici global WebSocket or the
+      // `ws` package's WebSocket depending on the Node runtime (see
+      // resolveWebSocketImpl above) — their type declarations disagree on the
+      // exact MessageEvent shape, so this is intentionally untyped rather
+      // than forcing one implementation's types onto the other.
+      /** @type {any} */
       const ws = new this.WebSocketImpl(upstreamUrl(this.apiKey));
       // The global WebSocket defaults binaryType to "blob"; Gemini sends JSON
       // over binary frames, so without this every message arrives as an
