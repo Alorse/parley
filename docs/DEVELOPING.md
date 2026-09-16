@@ -139,6 +139,23 @@ Two more service-worker rules, both learned the hard way:
   **second** load: the first navigation is still served by the old worker, which
   installs the new one.
 
+## Commit authorship
+
+Every commit is authored by the repository owner; the agent (or person) that
+actually implemented the change is credited with a trailer:
+
+```
+docs: document the commit authorship convention
+
+<what changed and why>
+
+Co-authored-by: Hermes Agent <hermes-agent@users.noreply.github.com>
+```
+
+Use `Claude Code <noreply@anthropic.com>` when the change came from Claude Code.
+Keep the two — the author on top, one co-author trailer — rather than adding
+several.
+
 ## Repo layout
 
 ```
