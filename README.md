@@ -31,4 +31,4 @@ npm run browser-check  # headless Chrome driving the real page with a fake mic
 
 More detail: [docs/DEVELOPING.md](docs/DEVELOPING.md) — environment variables,
 model fallbacks, testing, and the cache/versioning rules for shipping an update.
-Design system: [DESIGN.md](DESIGN.md).
+Design system: [DESIGN.md](DESIGN.md). Want to help? [CONTRIBUTING.md](CONTRIBUTING.md).

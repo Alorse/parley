@@ -139,10 +139,14 @@ Two more service-worker rules, both learned the hard way:
   **second** load: the first navigation is still served by the old worker, which
   installs the new one.
 
-## Commit authorship
+## Commit authorship (agent commits only)
 
-Every commit is authored by the repository owner; the agent (or person) that
-actually implemented the change is credited with a trailer:
+**This applies only to the automated agents that work directly on this checkout**
+(and to any other agent configured the same way). It is not a rule for human
+contributors — see [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+The agents commit as the repository owner and credit whoever implemented the
+change with a single trailer:
 
 ```
 docs: document the commit authorship convention
@@ -153,8 +157,12 @@ Co-authored-by: Hermes Agent <hermes-agent@users.noreply.github.com>
 ```
 
 Use `Claude Code <noreply@anthropic.com>` when the change came from Claude Code.
-Keep the two — the author on top, one co-author trailer — rather than adding
-several.
+One author line, one co-author trailer — not several.
+
+Note that git has no way to enforce this: the author of a commit is whatever the
+committer's own git config says. It is a convention, kept because the owner is
+the one accountable for the repository, and it is implemented for the agents via
+this checkout's local git config.
 
 ## Repo layout
 
