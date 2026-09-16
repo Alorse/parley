@@ -90,7 +90,11 @@ export function searchWords(query) {
 // their name), as opposed to how they've configured the app.
 
 const PROFILE_KEY = 'parley-profile-v1';
-const DEFAULT_PROFILE = { name: '' };
+// A "handful of facts", per the issue this implements — not a transcript,
+// and never something that grows forever. Kept small enough that the whole
+// note still reads as one short reminder when handed to the tutor prompt.
+const MEMORY_CAP = 5;
+const DEFAULT_PROFILE = { name: '', memories: [] };
 
 function loadProfile() {
   return loadJson(PROFILE_KEY, DEFAULT_PROFILE);
@@ -112,3 +116,76 @@ export function setProfileName(profile, name) {
   saveProfile(profile);
   return profile;
 }
+
+// Appends one short line about a finished conversation, dropping the oldest
+// once there are more than MEMORY_CAP — the hard cap that keeps this from
+// ever becoming a big accumulated thing.
+export function addConversationMemory(profile, line) {
+  const trimmed = (line || '').trim();
+  if (!trimmed) return profile;
+  const memories = Array.isArray(profile.memories) ? profile.memories.slice() : [];
+  memories.push(trimmed);
+  profile.memories = memories.slice(-MEMORY_CAP);
+  saveProfile(profile);
+  return profile;
+}
+
+// The short note handed to the tutor at the start of a new conversation —
+// empty when there's nothing remembered yet.
+export function getMemoryNote(profile) {
+  const memories = Array.isArray(profile.memories) ? profile.memories : [];
+  return memories.join(' | ');
+}
+
+// The "forget everything" control in Settings: wipes the name and every
+// stored memory line, so the app behaves as if it had never met the learner.
+export function forgetProfile() {
+  const fresh = { name: '', memories: [] };
+  saveProfile(fresh);
+  return fresh;
+}
+
+// --- conversation memory line ---------------------------------------------
+// Builds the one short line saved when a conversation ends, e.g. "talked
+// about the weekend; the past tense was hard". Deliberately deterministic —
+// it reuses the corrections already returned by the per-turn review instead
+// of asking the model to summarize the conversation with a separate call.
+
+const MISTAKE_KEYWORDS = [
+  { pattern: /\bpast tense\b|\bwas\/were\b/i, label: 'the past tense was hard' },
+  { pattern: /\bpresent (?:simple|continuous|tense)\b/i, label: 'the present tense was hard' },
+  { pattern: /\barticles?\b|\ba\/an\b/i, label: 'articles were tricky' },
+  { pattern: /\bprepositions?\b/i, label: 'prepositions were tricky' },
+  { pattern: /\bplurals?\b/i, label: 'plurals were tricky' },
+  { pattern: /\bword order\b/i, label: 'word order was tricky' },
+  { pattern: /\bagreement\b/i, label: 'subject-verb agreement was tricky' },
+  { pattern: /\bpronunciation\b/i, label: 'pronunciation needs more practice' },
+];
+
+function summarizeMistake(corrections) {
+  if (!Array.isArray(corrections) || corrections.length === 0) return '';
+  const counts = new Map();
+  for (const c of corrections) {
+    const text = `${c?.why || ''} ${c?.from || ''} ${c?.to || ''}`;
+    for (const { pattern, label } of MISTAKE_KEYWORDS) {
+      if (pattern.test(text)) counts.set(label, (counts.get(label) || 0) + 1);
+    }
+  }
+  let best = '';
+  let bestCount = 0;
+  for (const [label, count] of counts) {
+    if (count > bestCount) {
+      best = label;
+      bestCount = count;
+    }
+  }
+  return best || 'a few grammar mistakes came up';
+}
+
+export function buildConversationMemory(topic, corrections) {
+  const topicPhrase = topic && topic !== JUST_TALK ? topic.toLowerCase() : 'a free conversation';
+  const mistake = summarizeMistake(corrections);
+  return mistake ? `talked about ${topicPhrase}; ${mistake}` : `talked about ${topicPhrase}`;
+}
+
+export { MEMORY_CAP };
