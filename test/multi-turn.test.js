@@ -189,6 +189,20 @@ test('setLearnerName updates the name carried by every later review-request, onc
   session.stop();
 });
 
+// --- memory note flows into the persona turn --------------------------------
+
+test('a session with a memoryNote weaves it into the persona turn sent upstream', async () => {
+  const { ws } = await startSession({ memoryNote: 'talked about the weekend; the past tense was hard' });
+  const personaFrame = ws.sent[0];
+  assert.match(personaFrame.clientContent.turns[0].parts[0].text, /talked about the weekend; the past tense was hard/);
+});
+
+test('a session with no memoryNote mentions nothing about a remembered conversation', async () => {
+  const { ws } = await startSession();
+  const personaFrame = ws.sent[0];
+  assert.doesNotMatch(personaFrame.clientContent.turns[0].parts[0].text, /remember this from earlier conversations/i);
+});
+
 // --- anti-freeze silence nudge, wired through a real session ----------------
 
 function textOf(frame) {

@@ -7,14 +7,14 @@ export class LiveClient extends EventTarget {
     this.ws = null;
   }
 
-  connect({ scenario, level, voice, halfDuplex, feedbackDetail, name }) {
+  connect({ scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote }) {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/live`);
       this.ws = ws;
 
       const onOpen = () => {
-        this.send({ type: 'start', scenario, level, voice, halfDuplex, feedbackDetail, name });
+        this.send({ type: 'start', scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote });
         resolve();
       };
       const onError = () => reject(new Error('Could not connect to the tutor.'));

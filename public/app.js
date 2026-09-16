@@ -1,6 +1,20 @@
 import { iconMarkup } from './icons.js';
 import { Orb, MicWaveform } from './orb.js';
-import { SCENARIOS, SCENARIO_CATEGORIES, JUST_TALK, masteryTier, recordWordSighting, searchWords, getAllWords, getProfile, setProfileName } from './data.js';
+import {
+  SCENARIOS,
+  SCENARIO_CATEGORIES,
+  JUST_TALK,
+  masteryTier,
+  recordWordSighting,
+  searchWords,
+  getAllWords,
+  getProfile,
+  setProfileName,
+  getMemoryNote,
+  addConversationMemory,
+  buildConversationMemory,
+  forgetProfile,
+} from './data.js';
 import { LiveClient } from './live-client.js';
 import { AudioCapture } from './audio-capture.js';
 import { AudioPlayer } from './audio-player.js';
@@ -84,6 +98,10 @@ const state = {
   lastTutorText: '',
   lastUserText: '',
   lastReview: null,
+  // Accumulated across the current conversation only, to build the one-line
+  // memory saved when it ends — see finalizeConversationMemory().
+  conversationCorrections: [],
+  hadTurn: false,
   themesFilter: 'All',
   themesQuery: '',
   wordsQuery: '',
@@ -236,6 +254,9 @@ function handleReview(msg) {
   }
 
   state.lastReview = msg;
+  if (Array.isArray(msg.corrections) && msg.corrections.length > 0) {
+    state.conversationCorrections.push(...msg.corrections);
+  }
 
   el('score-message').classList.add('hidden');
   el('score-value').classList.remove('hidden');
@@ -292,6 +313,8 @@ async function ensureSession() {
   if (state.sessionStarted) return;
   if (connectPromise) return connectPromise;
   hideError();
+  state.conversationCorrections = [];
+  state.hadTurn = false;
   connectPromise = liveClient
     .connect({
       scenario: state.scenario,
@@ -300,6 +323,7 @@ async function ensureSession() {
       halfDuplex: state.settings.halfDuplex,
       feedbackDetail: state.settings.feedbackDetail,
       name: state.profile.name,
+      memoryNote: getMemoryNote(state.profile),
     })
     .then(() => {
       state.sessionStarted = true;
@@ -310,6 +334,24 @@ async function ensureSession() {
     });
   return connectPromise;
 }
+
+// A conversation is "finished" the moment its session actually ends, however
+// that happens — the End button closing the socket, the server closing it,
+// a dropped connection, or the tab simply going away (see the pagehide
+// listener below). Idempotent (guarded by hadTurn) so it's safe to reach
+// from more than one of those places for the same session.
+function finalizeConversationMemory() {
+  if (!state.hadTurn) return;
+  const line = buildConversationMemory(state.scenario, state.conversationCorrections);
+  state.profile = addConversationMemory(state.profile, line);
+  state.hadTurn = false;
+  state.conversationCorrections = [];
+}
+
+// Best-effort net for a tab that simply closes: localStorage writes are
+// synchronous, so this can still complete even though there is no more
+// WebSocket 'close' event guaranteed to fire during unload.
+window.addEventListener('pagehide', finalizeConversationMemory);
 
 liveClient.addEventListener('message', (event) => {
   const msg = /** @type {CustomEvent} */ (event).detail;
@@ -339,6 +381,7 @@ liveClient.addEventListener('message', (event) => {
       audioPlayer.flush();
       break;
     case 'turn-complete':
+      state.hadTurn = true;
       break;
     case 'review':
       handleReview(msg);
@@ -358,6 +401,7 @@ liveClient.addEventListener('message', (event) => {
 });
 
 liveClient.addEventListener('close', () => {
+  finalizeConversationMemory();
   if (state.sessionStarted) {
     state.sessionStarted = false;
     state.micOn = false;
@@ -399,6 +443,9 @@ el('mic-btn').addEventListener('click', async () => {
 
 el('end-btn').addEventListener('click', () => {
   if (!state.sessionStarted) return;
+  // finalizeConversationMemory() is not called here: liveClient.stop()
+  // closes the socket, which fires the 'close' listener below — the single
+  // place a session's end is actually detected, whatever caused it.
   liveClient.stop();
   audioCapture.stop();
   audioPlayer.flush();
@@ -641,6 +688,12 @@ el('save-words-toggle').addEventListener('click', () => {
   updateSetting('saveWords', on);
 });
 
+el('forget-btn').addEventListener('click', () => {
+  if (!window.confirm("Forget everything Parley remembers about you? This clears your name and what it knows from past conversations — it can't be undone.")) return;
+  state.profile = forgetProfile();
+  renderSettingsSheet();
+});
+
 function openSettingsSheet() {
   renderSettingsSheet();
   el('settings-sheet').classList.remove('hidden');
@@ -666,7 +719,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=5').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=6').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

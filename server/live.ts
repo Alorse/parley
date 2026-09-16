@@ -243,6 +243,7 @@ export interface GeminiLiveSessionOptions {
   feedbackDetail?: string;
   halfDuplex?: boolean;
   learnerName?: string;
+  memoryNote?: string;
   webSocketImpl?: any;
 }
 
@@ -266,6 +267,7 @@ export class GeminiLiveSession extends EventEmitter {
   nativeLanguage: string;
   feedbackDetail: string;
   learnerName: string;
+  memoryNote: string;
   WebSocketImpl: any;
   gate: HalfDuplexGate;
   nudge: SilenceNudge;
@@ -295,6 +297,7 @@ export class GeminiLiveSession extends EventEmitter {
     feedbackDetail = 'every-turn',
     halfDuplex = true,
     learnerName = '',
+    memoryNote = '',
     webSocketImpl = resolveWebSocketImpl(),
   }: GeminiLiveSessionOptions) {
     super();
@@ -306,6 +309,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.nativeLanguage = nativeLanguage;
     this.feedbackDetail = feedbackDetail;
     this.learnerName = learnerName;
+    this.memoryNote = memoryNote;
     this.WebSocketImpl = webSocketImpl;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
     this.nudge = new SilenceNudge();
@@ -424,6 +428,7 @@ export class GeminiLiveSession extends EventEmitter {
       nativeLanguage: this.nativeLanguage,
       feedbackDetail: this.feedbackDetail,
       learnerName: this.learnerName,
+      memoryNote: this.memoryNote,
     });
     this.turn.silent = true;
     this._sendUpstream(textUpstreamFrame(prompt));

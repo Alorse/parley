@@ -13,6 +13,11 @@ export interface StartMessage {
   halfDuplex?: boolean;
   feedbackDetail?: string;
   name?: string;
+  // A short line (or a few, cap-joined) from the learner's on-device memory
+  // — see public/data.js's getMemoryNote — so the tutor can reference an
+  // earlier conversation. Never stored server-side: forwarded straight into
+  // the persona prompt and otherwise forgotten once the session ends.
+  memoryNote?: string;
 }
 
 export interface AudioMessage {
