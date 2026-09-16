@@ -30,13 +30,13 @@ test('generateContent uses the single `model` when no `models` chain is given', 
   assert.match(calledUrls[0], /\/only-model:generateContent/);
 });
 
-test('generateContent falls through the chain in order on 429 (quota exhausted)', async () => {
+test('generateContent falls through the chain in order on 429 (quota exhausted), one request per model', async () => {
   const calledModels = [];
   const text = await generateContent({
     apiKey: 'k',
     models: ['model-a', 'model-b', 'model-c'],
     prompt: 'hi',
-    retries: 0,
+    retries: 2,
     fetchImpl: async (url) => {
       const model = url.match(/models\/([^:]+):/)[1];
       calledModels.push(model);
@@ -45,16 +45,36 @@ test('generateContent falls through the chain in order on 429 (quota exhausted)'
     },
   });
   assert.equal(text, 'from model-c');
+  // A 429 is not retried — exactly one request per exhausted model, then
+  // the chain moves on immediately.
   assert.deepEqual(calledModels, ['model-a', 'model-b', 'model-c']);
 });
 
-test('generateContent falls through on 503 (overloaded) the same way as 429', async () => {
+test('generateContent reaches the second model after a single request when the first is 429', async () => {
+  const calledModels = [];
+  const text = await generateContent({
+    apiKey: 'k',
+    models: ['exhausted', 'working'],
+    prompt: 'hi',
+    retries: 2,
+    fetchImpl: async (url) => {
+      const model = url.match(/models\/([^:]+):/)[1];
+      calledModels.push(model);
+      if (model === 'exhausted') return errorResponse(429);
+      return okResponse('from working');
+    },
+  });
+  assert.equal(text, 'from working');
+  assert.deepEqual(calledModels, ['exhausted', 'working']);
+});
+
+test('generateContent retries a 503 (overloaded) model before falling through', async () => {
   const calledModels = [];
   const text = await generateContent({
     apiKey: 'k',
     models: ['model-a', 'model-b'],
     prompt: 'hi',
-    retries: 0,
+    retries: 1,
     fetchImpl: async (url) => {
       const model = url.match(/models\/([^:]+):/)[1];
       calledModels.push(model);
@@ -63,7 +83,9 @@ test('generateContent falls through on 503 (overloaded) the same way as 429', as
     },
   });
   assert.equal(text, 'from model-b');
-  assert.deepEqual(calledModels, ['model-a', 'model-b']);
+  // Unlike 429, a 503 is retried (up to `retries` times) before the chain
+  // advances — two attempts on model-a here (initial + 1 retry).
+  assert.deepEqual(calledModels, ['model-a', 'model-a', 'model-b']);
 });
 
 test('generateContent stops at the first model that works and never calls later ones', async () => {

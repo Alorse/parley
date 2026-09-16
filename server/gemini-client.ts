@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const ENDPOINT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-const RETRYABLE_STATUSES = new Set([429, 503]);
+const OVERLOADED_STATUS = 503;
 
 // Gemini's structured-output schema format (a restricted JSON Schema
 // subset) — shared by REVIEW_SCHEMA in review.js and generateContent's
@@ -38,9 +38,15 @@ interface GeminiGenerateContentResponse {
 }
 
 // Google's generateContent endpoint occasionally answers with a documented
-// transient 503 ("high demand ... try again later") or 429 (rate limit /
-// quota exhausted), independent of request shape — retry a couple of times
-// with backoff before giving up on a given model.
+// transient 503 ("high demand ... try again later") — retry a couple of
+// times with backoff before giving up on a given model, since that's a
+// real transient condition a short wait can clear.
+//
+// A 429 is different: on the free tier it's almost always the model's
+// *daily* quota (resets at midnight Pacific), so retrying the same model
+// one or two seconds later cannot help — it only adds latency. On 429 we
+// return immediately and let the caller fall through to the next model in
+// the chain.
 async function requestModel({
   apiKey,
   model,
@@ -60,7 +66,7 @@ async function requestModel({
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt >= retries) return res;
+    if (res.ok || res.status !== OVERLOADED_STATUS || attempt >= retries) return res;
     await delay(1000 * (attempt + 1));
   }
 }
