@@ -135,3 +135,65 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
 
   session.stop();
 });
+
+// --- anti-freeze silence nudge, wired through a real session ----------------
+
+function textOf(frame) {
+  return frame.clientContent?.turns?.[0]?.parts?.[0]?.text;
+}
+
+test('armSilenceNudge speaks the nudge via say() if the learner stays silent', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  const sentBeforeNudge = ws.sent.length;
+  session.nudge.delayMs = 30; // short delay so the test doesn't wait 6s
+  session.armSilenceNudge();
+
+  await delay(60);
+  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFrames.length, 1, 'the nudge text was sent upstream exactly once');
+
+  session.stop();
+});
+
+test('armSilenceNudge is disarmed by learner input (sendAudio) and never fires', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  const sentBeforeNudge = ws.sent.length;
+  session.nudge.delayMs = 30;
+  session.armSilenceNudge();
+
+  session.sendAudio('learner-retries-before-the-nudge-fires');
+  await delay(60);
+
+  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFrames.length, 0, 'learner input disarmed the nudge before its delay elapsed');
+
+  session.stop();
+});
+
+test('armSilenceNudge fires at most once even if re-armed after already firing', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  session.nudge.delayMs = 30;
+  session.armSilenceNudge();
+  await delay(60);
+
+  const sentAfterFirstFire = ws.sent.length;
+  assert.equal(session.nudge.shouldFire(), false, 'already fired once for this arm');
+
+  await delay(60);
+  const nudgeFramesAfterWaiting = ws.sent.slice(sentAfterFirstFire).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFramesAfterWaiting.length, 0, 'no second nudge without a fresh arm');
+
+  session.stop();
+});

@@ -33,6 +33,8 @@ const UPSTREAM_BASE =
 
 const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
+const SILENCE_NUDGE_DELAY_MS = 6000;
+const SILENCE_NUDGE_TEXT = "Take your time — try saying it, or we'll move on.";
 
 export function upstreamUrl(apiKey: string): string {
   return `${UPSTREAM_BASE}?key=${apiKey}`;
@@ -104,6 +106,21 @@ export function containsSpokenScore(assistantText: string): boolean {
   return /\b\d{1,3}\b/.test(assistantText) || NUMBER_WORD_PATTERN.test(assistantText);
 }
 
+// Mirrors the mandated invitation phrasing in tutor.ts's system prompt — kept
+// here (not imported) since it only needs to recognize the phrase in spoken
+// output, not author it.
+const CORRECTION_INVITATION_PATTERN = /\btry saying\b|\bgive (?:that|it) one a go\b/i;
+
+// Low-noise compliance signal only, same spirit as containsSpokenScore: a
+// completed turn that both invites a retry and asks a question is a
+// candidate "stacked turn" — the correction-then-question pattern Part 1 is
+// meant to eliminate. Flags after the fact for a counter; never gates or
+// alters anything mid-stream.
+export function containsStackedTurn(assistantText: string): boolean {
+  if (!assistantText) return false;
+  return CORRECTION_INVITATION_PATTERN.test(assistantText) && assistantText.includes('?');
+}
+
 export interface HalfDuplexGateOptions {
   tailGuardMs?: number;
   enabled?: boolean;
@@ -155,6 +172,56 @@ export class HalfDuplexGate {
   }
 }
 
+export interface SilenceNudgeOptions {
+  delayMs?: number;
+  now?: () => number;
+}
+
+// Pure, timestamp-based arming state for the anti-freeze nudge, in the same
+// style as HalfDuplexGate: comparisons over an injectable clock, no
+// setTimeout, so the "should this fire yet" decision is unit-testable
+// without real timers. The session (GeminiLiveSession) is what actually
+// schedules a real timer and calls say() when shouldFire() turns true —
+// this class only owns "armed after a correction, disarmed by learner
+// input, fires at most once".
+export class SilenceNudge {
+  delayMs: number;
+  private _now: () => number;
+  private _armedAt: number | null;
+  private _fired: boolean;
+
+  constructor({ delayMs = SILENCE_NUDGE_DELAY_MS, now = () => Date.now() }: SilenceNudgeOptions = {}) {
+    this.delayMs = delayMs;
+    this._now = now;
+    this._armedAt = null;
+    this._fired = false;
+  }
+
+  arm(): void {
+    this._armedAt = this._now();
+    this._fired = false;
+  }
+
+  disarm(): void {
+    this._armedAt = null;
+    this._fired = false;
+  }
+
+  isArmed(): boolean {
+    return this._armedAt !== null;
+  }
+
+  // True the first time delayMs has elapsed since arm(); false before that,
+  // once disarmed, and on every call after it has already fired once — so a
+  // caller can safely re-check without ever firing twice for the same arm.
+  shouldFire(): boolean {
+    if (this._armedAt === null || this._fired) return false;
+    if (this._now() - this._armedAt < this.delayMs) return false;
+    this._fired = true;
+    return true;
+  }
+}
+
 interface Turn {
   userText: string;
   assistantText: string;
@@ -198,19 +265,22 @@ export class GeminiLiveSession extends EventEmitter {
   feedbackDetail: string;
   WebSocketImpl: any;
   gate: HalfDuplexGate;
+  nudge: SilenceNudge;
   ws: any;
   closed: boolean;
   reconnectAttempted: boolean;
   turn: Turn;
   private _thinkingTimer: NodeJS.Timeout | undefined;
   private _resumeTimer: NodeJS.Timeout | undefined;
+  private _nudgeTimer: NodeJS.Timeout | undefined;
   // Separate from gate._speaking (which starts pre-closed, see below) —
   // tracks whether we've told the client we're in the 'speaking' state
   // for the turn currently in flight.
   private _speakingUi: boolean;
-  // Compliance metric only — see containsSpokenScore. Never read back to
-  // gate or alter behaviour mid-stream.
+  // Compliance metrics only — see containsSpokenScore/containsStackedTurn.
+  // Never read back to gate or alter behaviour mid-stream.
   private _spokenScoreViolations: number;
+  private _stackedTurnViolations: number;
 
   constructor({
     apiKey,
@@ -233,6 +303,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.feedbackDetail = feedbackDetail;
     this.WebSocketImpl = webSocketImpl;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
+    this.nudge = new SilenceNudge();
     // The persona/greeting turn is sent as soon as setup completes, before
     // the learner has said anything. Close the mic gate immediately so any
     // audio the client streams while getUserMedia/connect is still settling
@@ -246,8 +317,10 @@ export class GeminiLiveSession extends EventEmitter {
     this.turn = freshTurn();
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
+    this._nudgeTimer = undefined;
     this._speakingUi = false;
     this._spokenScoreViolations = 0;
+    this._stackedTurnViolations = 0;
   }
 
   setHalfDuplex(enabled: boolean): void {
@@ -354,8 +427,10 @@ export class GeminiLiveSession extends EventEmitter {
   private _clearTimers(): void {
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._resumeTimer);
+    clearTimeout(this._nudgeTimer);
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
+    this._nudgeTimer = undefined;
   }
 
   private _armThinkingTimer(): void {
@@ -366,6 +441,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   sendAudio(base64Data: string): boolean {
+    this._disarmSilenceNudge();
     if (this.gate.isGated()) return false;
     this._armThinkingTimer();
     this._sendUpstream(audioUpstreamFrame(base64Data));
@@ -373,6 +449,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   sendText(text: string): void {
+    this._disarmSilenceNudge();
     this._sendUpstream(textUpstreamFrame(text));
   }
 
@@ -383,11 +460,35 @@ export class GeminiLiveSession extends EventEmitter {
 
   interrupt(): void {
     this.gate.onInterrupted();
+    this._disarmSilenceNudge();
     this._clearTimers();
     this.turn = freshTurn();
     this._speakingUi = false;
     this._emitClient({ type: 'interrupted' });
     this._emitClient({ type: 'state', value: 'listening' });
+  }
+
+  // Armed by index.ts once a completed turn's review comes back with at
+  // least one correction. If the learner stays silent, automatic activity
+  // detection never starts a new upstream turn on its own — nothing else in
+  // this session would ever speak again — so this is what keeps the
+  // conversation from freezing after the pace change in Part 1. Fires at
+  // most once per arm (SilenceNudge.shouldFire), and only speaks via say(),
+  // which is already silent (no review, no score history pollution).
+  armSilenceNudge(): void {
+    this.nudge.arm();
+    clearTimeout(this._nudgeTimer);
+    this._nudgeTimer = setTimeout(() => {
+      if (this.nudge.shouldFire()) {
+        this.say(SILENCE_NUDGE_TEXT);
+      }
+    }, this.nudge.delayMs);
+  }
+
+  private _disarmSilenceNudge(): void {
+    this.nudge.disarm();
+    clearTimeout(this._nudgeTimer);
+    this._nudgeTimer = undefined;
   }
 
   stop(): void {
@@ -462,6 +563,13 @@ export class GeminiLiveSession extends EventEmitter {
     if (containsSpokenScore(assistantText)) {
       this._spokenScoreViolations += 1;
       console.warn('live: assistant may have spoken a score', { count: this._spokenScoreViolations });
+    }
+
+    if (containsStackedTurn(assistantText)) {
+      this._stackedTurnViolations += 1;
+      console.warn('live: assistant may have stacked a follow-up question onto a correction turn', {
+        count: this._stackedTurnViolations,
+      });
     }
 
     if (!silent) {
