@@ -2,10 +2,10 @@
 
 This document records the visual identity chosen for Parley and the
 reasoning behind it. It replaces the initial build, which — by design brief
-at the time — closely followed the "the reference app" reference screenshots (cream
-background, orange blob, floating pill nav). That look was rejected as a
-literal copy of the reference rather than an identity of its own. The
-pre-rewrite state is tagged `design/reference-v1` in git history.
+at the time — closely followed an early reference screenshot set the client
+shared (cream background, orange blob, floating pill nav). That look was
+rejected as a literal copy of the reference rather than an identity of its
+own.
 
 ## The brief, restated
 
@@ -71,8 +71,8 @@ variable weight ranges, no runtime Google Fonts request):
 - **Manrope** (variable, 400–800) — everything else: nav, buttons, body
   copy, labels, card titles, the learner's own transcript line, settings.
   Clean, geometric-humanist, legible at small sizes, and structurally
-  distinct from the reference build's the previous font (which is rounder and
-  bubblier — appropriate for a cheerful daytime app, less so for this one).
+  distinct from the reference build's rounder, bubblier sans — appropriate
+  for a cheerful daytime app, less so for this one.
 
 The rule is simple and meaningful rather than arbitrary: **Fraunces speaks,
 Manrope organizes.** The tutor's voice and the learner's own words are never
@@ -155,9 +155,11 @@ visually confused with anything else.
 - **Bottom navigation is now a flush tab bar** (full-width, hairline top
   border, no shadow, no rounded pill, no inset margin) instead of the
   reference's floating rounded pill — a quieter, more native-feeling
-  structural device, and a clear departure from the reference app's own nav language.
-  Active tab is indicated by an ember-colored icon/label and a small dot
-  above it, not a filled pill background.
+  structural device, and a clear departure from the reference's own nav
+  language. Active tab is indicated by an ember-colored icon/label alone,
+  not a filled pill background — an earlier version also had a small dot
+  above the active icon, removed as decoration with no real meaning behind
+  it.
 - No tracked-out all-caps "eyebrow" labels above headings (the reference
   had "A PLACE TO BEGIN" and "LITTLE BY LITTLE · ENGLISH") — these are
   exactly the kind of templated chrome that reads as generated rather than
