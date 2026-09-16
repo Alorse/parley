@@ -10,8 +10,8 @@
 //   cache, which is what evicts a previous release's assets.
 // - Code (HTML/JS/CSS) is NETWORK-FIRST: there is no build step and no
 //   content-hashed filenames, so a cache-first shell can pair a fresh
-//   index.html with a stale app.js/styles.css after a release. Fonts and icons
-//   are immutable enough to serve cache-first.
+//   index.html with a stale app.js/styles.css after an update. Fonts and
+//   icons are immutable enough to serve cache-first.
 const CACHE_NAME = 'parley-v3';
 
 const APP_SHELL = [

@@ -30,7 +30,7 @@ test('buildConfig applies defaults when only the required key is set', () => {
   assert.equal(cfg.geminiLiveModel, 'gemini-3.8-live');
   assert.equal(cfg.geminiTextModel, 'gemini-3.8-flash');
   assert.equal(cfg.tutorVoice, 'Kore');
-  assert.equal(cfg.port, 8322);
+  assert.equal(cfg.port, 8080);
   assert.deepEqual(cfg.accessTokens, []);
   assert.equal(cfg.dataDir, '.data');
   assert.deepEqual(cfg.geminiLiveModelFallbacks, ['gemini-3.1-flash-live-preview']);

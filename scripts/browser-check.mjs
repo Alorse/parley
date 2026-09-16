@@ -12,7 +12,7 @@
 // Usage:
 //   node scripts/browser-check.mjs [url] [wav] [outdir] [--mobile] [--seconds N]
 //
-// Defaults: url=http://127.0.0.1:8322, wav=test/fixtures/fake-mic.wav,
+// Defaults: url=http://127.0.0.1:8080, wav=test/fixtures/fake-mic.wav,
 // outdir=tmp/browser-check (git-ignored).
 
 import { spawn } from 'node:child_process';
@@ -27,7 +27,7 @@ const require = createRequire(import.meta.url);
 const WebSocket = require(path.join(ROOT, 'node_modules', 'ws'));
 
 const args = process.argv.slice(2);
-const url = args[0] && !args[0].startsWith('--') ? args[0] : 'http://127.0.0.1:8322';
+const url = args[0] && !args[0].startsWith('--') ? args[0] : 'http://127.0.0.1:8080';
 const wav = args[1] && !args[1].startsWith('--') ? args[1] : path.join(ROOT, 'test/fixtures/fake-mic.wav');
 const outdir = args[2] && !args[2].startsWith('--') ? args[2] : path.join(ROOT, 'tmp/browser-check');
 const mobile = !args.includes('--desktop'); // Parley is phone-first; default to mobile emulation

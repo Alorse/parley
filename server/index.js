@@ -32,12 +32,10 @@ const MIME_TYPES = {
 
 let activeSessions = 0;
 
-// No build step means no content-hashed filenames, so any CDN/browser that
-// caches app.js or styles.css by URL alone can end up serving a stale file
-// alongside a fresh index.html after a release — a real incident: Cloudflare's
-// default edge cache for .js (4h TTL) once did exactly this and crashed the
-// app for real users. HTML and code always revalidate; only rarely-changing
-// binary assets (fonts/icons) get a real cache lifetime.
+// No build step means no content-hashed filenames, so any cache in front of the
+// app (or a browser) that keys on the URL alone can serve a stale styles.css or
+// app.js next to a fresh index.html. HTML and code therefore always revalidate;
+// only rarely-changing binary assets (fonts/icons) get a real cache lifetime.
 function cacheControlFor(ext) {
   if (ext === '.woff2' || ext === '.png' || ext === '.ico') {
     return 'public, max-age=86400';
@@ -60,9 +58,9 @@ async function serveStatic(req, res) {
     const headers = {
       'content-type': MIME_TYPES[ext] || 'application/octet-stream',
       'cache-control': cacheControlFor(ext),
-      // A validator lets an intermediary (Cloudflare) revalidate a cached
-      // copy instead of serving it until its TTL runs out, which is how a
-      // release can otherwise be served stale for hours.
+      // A validator lets an intermediary revalidate a cached copy instead of
+      // serving it until its TTL runs out, which is how a release can
+      // otherwise be served stale for hours.
       etag: `"${createHash('sha1').update(data).digest('hex').slice(0, 32)}"`,
     };
     if (req.headers['if-none-match'] === headers.etag) {

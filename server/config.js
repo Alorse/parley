@@ -62,7 +62,7 @@ export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
       'gemini-3.5-flash',
     ]),
     tutorVoice: env.TUTOR_VOICE || 'Kore',
-    port: Number(env.PORT) || 8322,
+    port: Number(env.PORT) || 8080,
     accessTokens: (env.ACCESS_TOKENS || '')
       .split(',')
       .map((t) => t.trim())
