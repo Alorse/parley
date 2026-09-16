@@ -600,7 +600,7 @@ svg {
 
 .word-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 18px 2px;
@@ -625,6 +625,25 @@ svg {
   color: var(--ink-soft);
   font-weight: 600;
   margin: 0;
+}
+
+.word-sentences {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--hairline);
+}
+
+.word-sentences p {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0 0 6px;
+}
+
+.word-sentences .no-sentences {
+  font-style: normal;
+  color: var(--ink-faint);
 }
 
 .word-meter {

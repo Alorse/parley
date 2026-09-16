@@ -82,6 +82,7 @@ const state = {
   themesFilter: 'All',
   themesQuery: '',
   wordsQuery: '',
+  expandedWord: null,
 };
 
 applyTextSize(state.settings.textSize);
@@ -482,20 +483,35 @@ function renderWords() {
       const tier = masteryTier(w.count);
       const filled = tier === 'Fragile' ? 1 : tier === 'Growing' ? 2 : 3;
       const segments = [0, 1, 2].map((i) => `<span class="meter-segment ${i < filled ? 'filled' : ''}"></span>`).join('');
+      const expanded = state.expandedWord === w.word;
+      const sentences = expanded && w.sentences.length
+        ? `<div class="word-sentences">${w.sentences.map((s) => `<p>“${escapeHtml(s)}”</p>`).join('')}</div>`
+        : expanded
+          ? '<div class="word-sentences"><p class="no-sentences">No saved sentences yet.</p></div>'
+          : '';
       return `
-        <div class="word-row">
+        <button class="word-row" type="button" data-word="${escapeHtml(w.word)}" aria-expanded="${expanded}">
           <div class="word-main">
             <p class="word-title">${escapeHtml(w.word)}</p>
             <p class="word-meaning">${escapeHtml(w.meaning)}</p>
+            ${sentences}
           </div>
           <div class="word-meter">
             <div class="meter-segments">${segments}</div>
             <span class="meter-label">${tier}</span>
           </div>
-        </div>`;
+        </button>`;
     })
     .join('');
   el('words-empty').classList.toggle('hidden', words.length > 0);
+
+  el('word-list').querySelectorAll('.word-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const word = row.dataset.word;
+      state.expandedWord = state.expandedWord === word ? null : word;
+      renderWords();
+    });
+  });
 }
 
 el('words-search').addEventListener('input', (e) => {
