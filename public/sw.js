@@ -40,7 +40,7 @@ const APP_SHELL = [
 
 const CODE_EXT = /\.(?:html|js|mjs|css|json|webmanifest)$/;
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', (/** @type {ExtendableEvent} */ event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
@@ -57,7 +57,7 @@ self.addEventListener('install', (event) => {
   );
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('activate', (/** @type {ExtendableEvent} */ event) => {
   event.waitUntil(
     caches
       .keys()
@@ -66,7 +66,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('fetch', (/** @type {FetchEvent} */ event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 

@@ -11,7 +11,7 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "test": "node --test test/*.test.js",
-    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
+    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json && tsc -p tsconfig.sw.json",
     "e2e": "node scripts/e2e-live.mjs",
     "browser-check": "node scripts/browser-check.mjs",
     "icons": "python3 scripts/make_icons.py"
@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/serviceworker": "^0.0.201",
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.3"
   }
