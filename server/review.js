@@ -1,3 +1,5 @@
+import { generateContent } from './gemini-client.js';
+
 const REVIEW_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -102,28 +104,7 @@ export async function review({ user, assistant, level, apiKey, model, fetchImpl 
   }
 
   const prompt = buildReviewPrompt({ user, assistant, level });
-  const res = await fetchImpl(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json', responseSchema: REVIEW_SCHEMA },
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    throw new Error(`review request failed with status ${res.status}`);
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error('review response had no content');
-  }
-
+  const text = await generateContent({ apiKey, model, prompt, responseSchema: REVIEW_SCHEMA, fetchImpl });
   return parseReviewPayload(text, { user });
 }
 

@@ -151,6 +151,10 @@ export class GeminiLiveSession extends EventEmitter {
     return new Promise((resolve, reject) => {
       let settled = false;
       const ws = new this.WebSocketImpl(upstreamUrl(this.apiKey));
+      // The global WebSocket defaults binaryType to "blob"; Gemini sends JSON
+      // over binary frames, so without this every message arrives as an
+      // unreadable Blob and silently fails to parse.
+      ws.binaryType = 'arraybuffer';
       this.ws = ws;
 
       ws.addEventListener('open', () => {
@@ -160,7 +164,8 @@ export class GeminiLiveSession extends EventEmitter {
       ws.addEventListener('message', (event) => {
         let msg;
         try {
-          msg = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString());
+          const text = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8');
+          msg = JSON.parse(text);
         } catch {
           return;
         }
