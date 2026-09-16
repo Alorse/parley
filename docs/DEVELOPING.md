@@ -18,7 +18,8 @@ the tutor prompt, applies the half-duplex microphone gate, and turns each
 finished turn into a structured review (score, corrections, words).
 
 - `public/` — plain browser ES modules. No bundler, no framework, no TypeScript.
-- `server/` — plain Node ESM. `node server/index.js` is the whole runtime.
+- `server/` — TypeScript, run directly via `tsx` (no build step, no `dist/`).
+  `node --import tsx server/index.ts` is the whole runtime.
 - `DESIGN.md` — the visual identity ("Afterglow") and why it is what it is.
 
 ## Environment variables (`.env`)
@@ -36,7 +37,7 @@ finished turn into a structured review (score, corrections, words).
 | `DATA_DIR` | `.data` | where the tiny JSON profile store lives |
 | `MAX_SESSIONS` | `4` | concurrent `/live` sessions before new ones get `{code:"busy"}` |
 
-`.env` is parsed by a ~20-line hand-rolled parser in `server/config.js` — no
+`.env` is parsed by a ~20-line hand-rolled parser in `server/config.ts` — no
 `dotenv` dependency. It is git-ignored; never commit it.
 
 ## Model fallback chains
@@ -44,16 +45,16 @@ finished turn into a structured review (score, corrections, words).
 Gemini's free tier enforces a **per-model** daily request quota (429
 `RESOURCE_EXHAUSTED`), and any model can occasionally answer 503 ("high demand —
 try again later"). Instead of surfacing either as a hard failure,
-`server/gemini-client.js`'s `generateContent()` walks `GEMINI_TEXT_MODEL_FALLBACKS`
+`server/gemini-client.ts`'s `generateContent()` walks `GEMINI_TEXT_MODEL_FALLBACKS`
 in order — review, translate and hint all use the same chain — and
-`server/index.js` does the equivalent for `GEMINI_LIVE_MODEL_FALLBACKS` when a
+`server/index.ts` does the equivalent for `GEMINI_LIVE_MODEL_FALLBACKS` when a
 `/live` session fails to complete upstream setup. The first model that works
 wins; the user only sees an error if the whole chain fails.
 
 ## Node version
 
 The app runs on Node **20.11+** and later. Node ≥ 22 ships a global `WebSocket`;
-Node 20 does not, so `server/live.js` uses the global when present and otherwise
+Node 20 does not, so `server/live.ts` uses the global when present and otherwise
 falls back to the `ws` package we already depend on.
 
 Worth knowing: the `node` in your shell and the `node` that runs the service can
@@ -64,7 +65,7 @@ you actually run:
 
 ```bash
 /usr/bin/node --version
-/usr/bin/node --test test/*.test.js
+/usr/bin/node --import tsx --test test/*.test.js
 ```
 
 ## Testing
@@ -167,8 +168,8 @@ this checkout's local git config.
 ## Repo layout
 
 ```
-server/    config.js, tutor.js, live.js, review.js, translate.js,
-           gemini-client.js, store.js, index.js
+server/    config.ts, tutor.ts, live.ts, protocol.ts, review.ts, translate.ts,
+           gemini-client.ts, store.ts, index.ts (TypeScript, run via tsx)
 public/    index.html, styles.css, app.js, live-client.js, audio-capture.js,
            pcm-worklet.js, audio-player.js, orb.js, icons.js, data.js,
            manifest.webmanifest, sw.js, icons/, fonts/

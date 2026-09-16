@@ -10,7 +10,7 @@ Gemini Live API.
 ## Run it locally
 
 ```bash
-npm install            # the only dependency is `ws`
+npm install            # runtime dependencies: `ws` and `tsx` (runs server/*.ts, no build step)
 cp .env.example .env   # add your GOOGLE_API_KEY
 npm start              # http://127.0.0.1:8080
 ```
