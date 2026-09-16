@@ -174,7 +174,9 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'start') {
-      const profile = store.read('profile', {});
+      /** @type {{ scenario?: string, level?: string, voice?: string, halfDuplex?: boolean, feedbackDetail?: string }} */
+      const profileFallback = {};
+      const profile = store.read('profile', profileFallback);
       const scenario = msg.scenario ?? profile.scenario ?? 'Just talk';
       const level = msg.level ?? profile.level ?? 'B1';
       const voice = msg.voice ?? profile.voice ?? config.tutorVoice;
