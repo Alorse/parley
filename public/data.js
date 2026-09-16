@@ -93,7 +93,7 @@ const PROFILE_KEY = 'parley-profile-v1';
 // A "handful of facts", per the issue this implements — not a transcript,
 // and never something that grows forever. Kept small enough that the whole
 // note still reads as one short reminder when handed to the tutor prompt.
-const MEMORY_CAP = 5;
+export const MEMORY_CAP = 5;
 const DEFAULT_PROFILE = { name: '', memories: [] };
 
 function loadProfile() {
@@ -165,18 +165,18 @@ const MISTAKE_KEYWORDS = [
 function summarizeMistake(corrections) {
   if (!Array.isArray(corrections) || corrections.length === 0) return '';
   const counts = new Map();
+  let best = '';
+  let bestCount = 0;
   for (const c of corrections) {
     const text = `${c?.why || ''} ${c?.from || ''} ${c?.to || ''}`;
     for (const { pattern, label } of MISTAKE_KEYWORDS) {
-      if (pattern.test(text)) counts.set(label, (counts.get(label) || 0) + 1);
-    }
-  }
-  let best = '';
-  let bestCount = 0;
-  for (const [label, count] of counts) {
-    if (count > bestCount) {
-      best = label;
-      bestCount = count;
+      if (!pattern.test(text)) continue;
+      const count = (counts.get(label) || 0) + 1;
+      counts.set(label, count);
+      if (count > bestCount) {
+        best = label;
+        bestCount = count;
+      }
     }
   }
   return best || 'a few grammar mistakes came up';
@@ -187,5 +187,3 @@ export function buildConversationMemory(topic, corrections) {
   const mistake = summarizeMistake(corrections);
   return mistake ? `talked about ${topicPhrase}; ${mistake}` : `talked about ${topicPhrase}`;
 }
-
-export { MEMORY_CAP };

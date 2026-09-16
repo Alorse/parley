@@ -336,10 +336,10 @@ async function ensureSession() {
 }
 
 // A conversation is "finished" the moment its session actually ends, however
-// that happens — the End button, the server closing the socket, a dropped
-// connection, or the tab simply going away (see the pagehide listener
-// below). Idempotent (guarded by hadTurn) so it's safe to call from more
-// than one of those places for the same session.
+// that happens — the End button closing the socket, the server closing it,
+// a dropped connection, or the tab simply going away (see the pagehide
+// listener below). Idempotent (guarded by hadTurn) so it's safe to reach
+// from more than one of those places for the same session.
 function finalizeConversationMemory() {
   if (!state.hadTurn) return;
   const line = buildConversationMemory(state.scenario, state.conversationCorrections);
@@ -443,7 +443,9 @@ el('mic-btn').addEventListener('click', async () => {
 
 el('end-btn').addEventListener('click', () => {
   if (!state.sessionStarted) return;
-  finalizeConversationMemory();
+  // finalizeConversationMemory() is not called here: liveClient.stop()
+  // closes the socket, which fires the 'close' listener below — the single
+  // place a session's end is actually detected, whatever caused it.
   liveClient.stop();
   audioCapture.stop();
   audioPlayer.flush();
