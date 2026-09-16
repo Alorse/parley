@@ -71,11 +71,11 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
     googleApiKey,
     geminiLiveModel: env.GEMINI_LIVE_MODEL || 'gemini-3.8-live',
     geminiLiveModelFallbacks: parseModelList(env.GEMINI_LIVE_MODEL_FALLBACKS, ['gemini-3.1-flash-live-preview']),
-    geminiTextModel: env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash',
+    geminiTextModel: env.GEMINI_TEXT_MODEL || 'gemini-3.5-flash-lite',
     geminiTextModelFallbacks: parseModelList(env.GEMINI_TEXT_MODEL_FALLBACKS, [
       'gemini-3.1-flash-lite',
       'gemini-2.5-flash',
-      'gemini-3.5-flash',
+      'gemini-3.6-flash',
     ]),
     tutorVoice: env.TUTOR_VOICE || 'Kore',
     port: Number(env.PORT) || 8080,

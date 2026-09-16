@@ -28,13 +28,13 @@ test('buildConfig applies defaults when only the required key is set', () => {
   const cfg = buildConfig({ GOOGLE_API_KEY: 'test-key' });
   assert.equal(cfg.googleApiKey, 'test-key');
   assert.equal(cfg.geminiLiveModel, 'gemini-3.8-live');
-  assert.equal(cfg.geminiTextModel, 'gemini-3.8-flash');
+  assert.equal(cfg.geminiTextModel, 'gemini-3.5-flash-lite');
   assert.equal(cfg.tutorVoice, 'Kore');
   assert.equal(cfg.port, 8080);
   assert.deepEqual(cfg.accessTokens, []);
   assert.equal(cfg.dataDir, '.data');
   assert.deepEqual(cfg.geminiLiveModelFallbacks, ['gemini-3.1-flash-live-preview']);
-  assert.deepEqual(cfg.geminiTextModelFallbacks, ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash']);
+  assert.deepEqual(cfg.geminiTextModelFallbacks, ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.6-flash']);
 });
 
 test('buildConfig overrides defaults from env', () => {
@@ -61,7 +61,7 @@ test('buildConfig parses the text/live model fallback chains from env, preservin
 
 test('buildConfig falls back to defaults when the fallback env vars are empty', () => {
   const cfg = buildConfig({ GOOGLE_API_KEY: 'k', GEMINI_TEXT_MODEL_FALLBACKS: '', GEMINI_LIVE_MODEL_FALLBACKS: '  ' });
-  assert.deepEqual(cfg.geminiTextModelFallbacks, ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash']);
+  assert.deepEqual(cfg.geminiTextModelFallbacks, ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.6-flash']);
   assert.deepEqual(cfg.geminiLiveModelFallbacks, ['gemini-3.1-flash-live-preview']);
 });
 

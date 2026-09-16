@@ -29,8 +29,8 @@ finished turn into a structured review (score, corrections, words).
 | `GOOGLE_API_KEY` | — | required, server-side only, never sent to the client |
 | `GEMINI_LIVE_MODEL` | `gemini-3.8-live` | speech-to-speech model |
 | `GEMINI_LIVE_MODEL_FALLBACKS` | `gemini-3.1-flash-live-preview` | comma-separated live models tried in order if the primary fails to complete setup |
-| `GEMINI_TEXT_MODEL` | `gemini-3-flash-preview` | review + translate + hint |
-| `GEMINI_TEXT_MODEL_FALLBACKS` | `gemini-3.1-flash-lite,gemini-2.5-flash,gemini-3.5-flash` | comma-separated text models tried in order on a 429 (quota) or 503 (overloaded) |
+| `GEMINI_TEXT_MODEL` | `gemini-3.5-flash-lite` | review + translate + hint |
+| `GEMINI_TEXT_MODEL_FALLBACKS` | `gemini-3.1-flash-lite,gemini-2.5-flash,gemini-3.6-flash` | comma-separated text models tried in order on a 429 (quota) or 503 (overloaded) |
 | `TUTOR_VOICE` | `Kore` | prebuilt voice (Kore/Aoede/Puck/Charon/Leda) |
 | `PORT` | `8080` | listens on 127.0.0.1 |
 | `ACCESS_TOKENS` | empty | optional comma-separated bearer tokens (unused if empty) |
