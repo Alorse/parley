@@ -11,7 +11,7 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "test": "node --test test/*.test.js",
-    "typecheck": "tsc -p tsconfig.server.json",
+    "typecheck": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json",
     "e2e": "node scripts/e2e-live.mjs",
     "browser-check": "node scripts/browser-check.mjs",
     "icons": "python3 scripts/make_icons.py"

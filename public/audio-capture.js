@@ -23,7 +23,7 @@ export class AudioCapture {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 16000 },
     });
 
-    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const Ctx = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
     this.ctx = new Ctx();
     if (this.ctx.state === 'suspended') await this.ctx.resume();
     await this.ctx.audioWorklet.addModule('/pcm-worklet.js');

@@ -41,7 +41,7 @@ export class AudioPlayer {
       if (this.ctx.state === 'suspended') await this.ctx.resume();
       return;
     }
-    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const Ctx = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
     try {
       this.ctx = new Ctx({ sampleRate: SOURCE_SAMPLE_RATE });
     } catch {

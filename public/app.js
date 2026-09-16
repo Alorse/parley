@@ -67,6 +67,10 @@ function micErrorMessage(err) {
   return (err && err.message) || 'Something went wrong. Please try again.';
 }
 
+// Untyped on purpose: callers immediately narrow to whatever element kind
+// they expect (input, button, select, ...), which a single shared helper
+// can't express without a cast at every call site.
+/** @returns {any} */
 const el = (id) => document.getElementById(id);
 
 const state = {
@@ -91,7 +95,7 @@ applyTextSize(state.settings.textSize);
 
 function renderStaticIcons() {
   document.querySelectorAll('[data-icon]').forEach((node) => {
-    node.innerHTML = iconMarkup(node.dataset.icon);
+    node.innerHTML = iconMarkup(/** @type {HTMLElement} */ (node).dataset.icon);
   });
 }
 
@@ -127,10 +131,10 @@ function updateWaveformVisibility() {
 function showScreen(name) {
   state.screen = name;
   for (const screen of document.querySelectorAll('.screen')) {
-    screen.classList.toggle('hidden', screen.dataset.screen !== name);
+    screen.classList.toggle('hidden', /** @type {HTMLElement} */ (screen).dataset.screen !== name);
   }
   for (const btn of document.querySelectorAll('.tab-btn')) {
-    if (btn.dataset.tab === name) btn.setAttribute('aria-current', 'page');
+    if (/** @type {HTMLElement} */ (btn).dataset.tab === name) btn.setAttribute('aria-current', 'page');
     else btn.removeAttribute('aria-current');
   }
   if (name === 'themes') renderThemeGrid();
@@ -138,7 +142,7 @@ function showScreen(name) {
 }
 
 document.querySelectorAll('.tab-btn').forEach((btn) => {
-  btn.addEventListener('click', () => showScreen(btn.dataset.tab));
+  btn.addEventListener('click', () => showScreen(/** @type {HTMLElement} */ (btn).dataset.tab));
 });
 
 // --- Talk screen: transcript + status ------------------------------------
@@ -269,7 +273,7 @@ async function ensureSession() {
 }
 
 liveClient.addEventListener('message', (event) => {
-  const msg = event.detail;
+  const msg = /** @type {CustomEvent} */ (event).detail;
   switch (msg.type) {
     case 'ready':
       hideError();

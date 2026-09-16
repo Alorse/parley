@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "public/app.js",
+    "public/live-client.js",
+    "public/orb.js",
+    "public/data.js",
+    "public/icons.js",
+    "public/audio-capture.js",
+    "public/audio-player.js"
+  ]
+}
