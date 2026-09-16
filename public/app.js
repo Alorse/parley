@@ -203,17 +203,47 @@ el('error-dismiss').addEventListener('click', hideError);
 
 // --- score pill + sheet --------------------------------------------------
 
+function showScorePillMessage(text) {
+  state.lastReview = null;
+  el('score-value').classList.add('hidden');
+  el('score-meter-track').classList.add('hidden');
+  el('score-message').textContent = text;
+  el('score-message').classList.remove('hidden');
+  el('score-pill').classList.remove('hidden');
+  scrollScorePillIntoView();
+}
+
+function scrollScorePillIntoView() {
+  // The score pill can land below the fold once the transcript grows long;
+  // never leave it sitting unseen behind the fixed nav.
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  el('score-pill').scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'center' });
+}
+
 function handleReview(msg) {
-  if (msg.error) return;
+  if (msg.error) {
+    showScorePillMessage('No score for that turn');
+    return;
+  }
+
+  if (msg.understood === false) {
+    // Nothing intelligible was said: no number, no meter, and nothing saved
+    // to the Words list for this turn — a hallucinated/garbled transcript
+    // must not pollute it.
+    showScorePillMessage("I didn't catch that — try again");
+    return;
+  }
+
   state.lastReview = msg;
 
+  el('score-message').classList.add('hidden');
+  el('score-value').classList.remove('hidden');
+  el('score-meter-track').classList.remove('hidden');
   el('score-value').textContent = String(msg.score);
   el('score-meter-fill').style.width = `${Math.max(0, Math.min(100, msg.score))}%`;
   el('score-tip').textContent = msg.tip || '';
   el('score-pill').classList.remove('hidden');
-  // The score pill can land below the fold once the transcript grows long;
-  // never leave it sitting unseen behind the fixed nav.
-  el('score-pill').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  scrollScorePillIntoView();
 
   if (state.settings.saveWords && Array.isArray(msg.words)) {
     for (const w of msg.words) {
@@ -621,7 +651,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=3').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=4').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

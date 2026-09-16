@@ -4,6 +4,7 @@ import { parseReviewPayload, review } from '../server/review.js';
 
 test('parseReviewPayload parses a well-formed JSON payload', () => {
   const raw = JSON.stringify({
+    understood: true,
     score: 82,
     scores: { pronunciation: 80, grammar: 90, fluency: 76 },
     corrections: [{ from: 'I go to…', to: 'I went to…', why: 'past tense' }],
@@ -11,6 +12,7 @@ test('parseReviewPayload parses a well-formed JSON payload', () => {
     words: [{ word: 'appointment', meaning: 'a scheduled meeting' }],
   });
   const result = parseReviewPayload(raw, { user: 'I go to the doctor yesterday' });
+  assert.equal(result.understood, true);
   assert.equal(result.score, 82);
   assert.deepEqual(result.scores, { pronunciation: 80, grammar: 90, fluency: 76 });
   assert.equal(result.corrections.length, 1);
@@ -20,6 +22,7 @@ test('parseReviewPayload parses a well-formed JSON payload', () => {
 
 test('parseReviewPayload clamps out-of-range scores', () => {
   const raw = JSON.stringify({
+    understood: true,
     score: 150,
     scores: { pronunciation: -20, grammar: 999, fluency: 50.6 },
     corrections: [],
@@ -35,6 +38,7 @@ test('parseReviewPayload clamps out-of-range scores', () => {
 
 test('parseReviewPayload caps corrections at 3 and words at 4', () => {
   const raw = JSON.stringify({
+    understood: true,
     score: 50,
     scores: { pronunciation: 50, grammar: 50, fluency: 50 },
     corrections: [1, 2, 3, 4, 5].map((i) => ({ from: `f${i}`, to: `t${i}`, why: `w${i}` })),
@@ -55,12 +59,45 @@ test('parseReviewPayload forces score 0 and no corrections when the user text is
     words: [],
   });
   const result = parseReviewPayload(raw, { user: '   ' });
+  assert.equal(result.understood, false);
   assert.equal(result.score, 0);
   assert.deepEqual(result.corrections, []);
 });
 
 test('parseReviewPayload throws on invalid JSON', () => {
   assert.throws(() => parseReviewPayload('not json', { user: 'hi' }));
+});
+
+test('parseReviewPayload reports understood=true for a normal, intelligible transcript', () => {
+  const raw = JSON.stringify({
+    understood: true,
+    score: 65,
+    scores: { pronunciation: 65, grammar: 65, fluency: 65 },
+    corrections: [],
+    tip: 'Nice pacing.',
+    words: [],
+  });
+  const result = parseReviewPayload(raw, { user: 'I went to the market this morning' });
+  assert.equal(result.understood, true);
+  assert.equal(result.score, 65);
+});
+
+test('parseReviewPayload reports understood=false and floors score to 0 when the model says the speech was not intelligible', () => {
+  const raw = JSON.stringify({
+    understood: false,
+    score: 60,
+    scores: { pronunciation: 60, grammar: 60, fluency: 60 },
+    corrections: [],
+    tip: '',
+    words: [],
+  });
+  // Non-empty transcript (e.g. hallucinated/partial ASR) but the model itself
+  // says it did not understand it — the reported score must still floor to 0
+  // even though the model's own `score` field disagreed.
+  const result = parseReviewPayload(raw, { user: 'mmmff garble noise' });
+  assert.equal(result.understood, false);
+  assert.equal(result.score, 0);
+  assert.deepEqual(result.corrections, []);
 });
 
 test('review() short-circuits to a zero score without calling the network for empty user text', async () => {
@@ -83,6 +120,7 @@ test('review() short-circuits to a zero score without calling the network for em
 
 test('review() parses the model response text from the generateContent envelope', async () => {
   const payload = {
+    understood: true,
     score: 70,
     scores: { pronunciation: 70, grammar: 70, fluency: 70 },
     corrections: [],

@@ -34,3 +34,15 @@ test('buildSystemPrompt never instructs the model to break character or reveal i
   assert.match(prompt, /Never mention being an AI/);
   assert.match(prompt, /Never break character/);
 });
+
+test('buildSystemPrompt never instructs the model to speak a score, in either feedback cadence', () => {
+  for (const feedbackDetail of ['every-turn', 'mistakes-only']) {
+    const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', feedbackDetail });
+    assert.doesNotMatch(prompt, /score out loud/i);
+    assert.doesNotMatch(prompt, /0-100/);
+    assert.doesNotMatch(prompt, /about eighty/i);
+    assert.doesNotMatch(prompt, /and a score/i);
+    assert.match(prompt, /non-evaluative encouragement/i);
+    assert.match(prompt, /never a score, a number, a percentage/i);
+  }
+});

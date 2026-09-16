@@ -16,7 +16,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="/styles.css?v=3" />
+<link rel="stylesheet" href="/styles.css?v=4" />
 </head>
 <body>
 <div id="app" class="app">
@@ -47,10 +47,11 @@
 
       <button id="score-pill" class="score-pill hidden" type="button">
         <span id="score-value" class="score-value">0</span>
-        <span class="score-meter-track">
+        <span id="score-meter-track" class="score-meter-track">
           <span class="score-meter-bar"><span id="score-meter-fill" class="score-meter-fill"></span></span>
           <span id="score-tip" class="score-tip"></span>
         </span>
+        <span id="score-message" class="score-message hidden"></span>
       </button>
 
       <div class="controls-row">
@@ -212,6 +213,6 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=3"></script>
+<script type="module" src="/app.js?v=4"></script>
 </body>
 </html>

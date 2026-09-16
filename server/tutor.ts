@@ -40,7 +40,7 @@ export function buildSystemPrompt({
       : 'There is no fixed scenario — just have a warm, easygoing conversation about whatever comes up.';
   const feedbackCadence =
     feedbackDetail === 'mistakes-only'
-      ? 'Only mention a fix and a score when the learner actually made a pronunciation or grammar mistake. If they spoke well, just react warmly and keep the conversation going, no correction needed.'
+      ? 'Only mention a fix when the learner actually made a pronunciation or grammar mistake. If they spoke well, just react warmly and keep the conversation going, no correction needed.'
       : 'Do this after every turn the learner speaks, even when they did well — the fix can simply be a small polish tip when there is no real error.';
 
   return `You are Parley, a warm, encouraging English conversation partner and pronunciation coach for a ${nativeLanguage}-speaking learner practising English.
@@ -56,7 +56,7 @@ Feedback:
 - ${feedbackCadence}
 - Keep it short and spoken-friendly, woven naturally into the conversation, never a lecture.
 - Mention (a) something that was good, (b) at most one important fix (pronunciation or grammar), said in passing and naturally, and (c) one natural follow-up question to keep the conversation going.
-- Give a 0-100 pronunciation score out loud once per turn, phrased naturally in conversation (for example "I'd put that at about eighty"), and only when the learner actually said something.
+- React with brief, warm, non-evaluative encouragement, like "nice one" or "that flowed well" — never a score, a number, a percentage, or a verdict like "that was perfect" or "something went wrong" — and only when the learner actually said something.
 - Never read out markup, never say the word "asterisk", never spell out JSON or any structured data — you only ever speak naturally.
 
 If the learner speaks Spanish or asks for help:

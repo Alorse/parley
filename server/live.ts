@@ -87,6 +87,23 @@ export function toUpstreamFrame(message: ClientMessage): GeminiUpstreamFrame | n
   }
 }
 
+const NUMBER_WORDS =
+  'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred';
+const SCORE_CONTEXT = /\b(score|scored|rate|rating|grade|out of (?:ten|100|a hundred)|percent)\b/i;
+const NUMBER_WORD_PATTERN = new RegExp(`\\b(${NUMBER_WORDS})\\b`, 'i');
+
+// The Live model's audio streams as it is generated, so a spoken score can't
+// be un-said once heard — there's no deterministic fallback at the audio
+// layer. This only flags the accumulated transcript after the fact, for a
+// compliance metric; it must never gate or alter anything mid-stream.
+export function containsSpokenScore(assistantText: string): boolean {
+  if (!assistantText) return false;
+  if (/%/.test(assistantText)) return true;
+  if (/\bpercent\b/i.test(assistantText)) return true;
+  if (!SCORE_CONTEXT.test(assistantText)) return false;
+  return /\b\d{1,3}\b/.test(assistantText) || NUMBER_WORD_PATTERN.test(assistantText);
+}
+
 export interface HalfDuplexGateOptions {
   tailGuardMs?: number;
   enabled?: boolean;
@@ -191,6 +208,9 @@ export class GeminiLiveSession extends EventEmitter {
   // tracks whether we've told the client we're in the 'speaking' state
   // for the turn currently in flight.
   private _speakingUi: boolean;
+  // Compliance metric only — see containsSpokenScore. Never read back to
+  // gate or alter behaviour mid-stream.
+  private _spokenScoreViolations: number;
 
   constructor({
     apiKey,
@@ -227,6 +247,7 @@ export class GeminiLiveSession extends EventEmitter {
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._speakingUi = false;
+    this._spokenScoreViolations = 0;
   }
 
   setHalfDuplex(enabled: boolean): void {
@@ -437,6 +458,11 @@ export class GeminiLiveSession extends EventEmitter {
 
     this._emitClient({ type: 'input-text', text: userText, final: true });
     this._emitClient({ type: 'output-text', text: assistantText, final: true });
+
+    if (containsSpokenScore(assistantText)) {
+      this._spokenScoreViolations += 1;
+      console.warn('live: assistant may have spoken a score', { count: this._spokenScoreViolations });
+    }
 
     if (!silent) {
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
