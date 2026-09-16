@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "e2e": "node scripts/e2e-live.mjs",
     "icons": "python3 scripts/make_icons.py"
   },
