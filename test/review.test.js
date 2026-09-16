@@ -96,6 +96,8 @@ test('parseReviewPayload reports understood=false and floors score to 0 when the
   // even though the model's own `score` field disagreed.
   const result = parseReviewPayload(raw, { user: 'mmmff garble noise' });
   assert.equal(result.understood, false);
+  assert.equal(result.score, 0);
+  assert.deepEqual(result.corrections, []);
 });
 
 test('review() short-circuits to a zero score without calling the network for empty user text', async () => {
