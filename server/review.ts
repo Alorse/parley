@@ -1,6 +1,31 @@
-import { generateContent } from './gemini-client.js';
+import { generateContent, type GeminiSchema } from './gemini-client.js';
 
-const REVIEW_SCHEMA = {
+export interface ReviewCorrection {
+  from: string;
+  to: string;
+  why: string;
+}
+
+export interface ReviewWord {
+  word: string;
+  meaning: string;
+}
+
+// The shape generateContent's REVIEW_SCHEMA-constrained JSON is parsed into
+// below — kept next to REVIEW_SCHEMA so the two can't silently drift apart.
+export interface ReviewResult {
+  score: number;
+  scores: {
+    pronunciation: number;
+    grammar: number;
+    fluency: number;
+  };
+  corrections: ReviewCorrection[];
+  tip: string;
+  words: ReviewWord[];
+}
+
+const REVIEW_SCHEMA: GeminiSchema = {
   type: 'OBJECT',
   properties: {
     score: { type: 'INTEGER' },
@@ -41,7 +66,7 @@ const REVIEW_SCHEMA = {
   required: ['score', 'scores', 'corrections', 'tip', 'words'],
 };
 
-function emptyReview() {
+function emptyReview(): ReviewResult {
   return {
     score: 0,
     scores: { pronunciation: 0, grammar: 0, fluency: 0 },
@@ -51,7 +76,13 @@ function emptyReview() {
   };
 }
 
-export function buildReviewPrompt({ user, assistant, level }) {
+export interface BuildReviewPromptParams {
+  user: string;
+  assistant?: string;
+  level?: string;
+}
+
+export function buildReviewPrompt({ user, assistant, level }: BuildReviewPromptParams): string {
   return `You are grading one turn of an English-speaking practice conversation for a learner at level ${level || 'B1'}.
 
 The learner's transcribed speech (ground truth for what they said):
@@ -65,18 +96,20 @@ Judge pronunciation, grammar, and fluency only from the learner's transcript abo
 Respond with JSON matching the required schema: an overall 0-100 score, per-category scores (pronunciation, grammar, fluency), at most 3 corrections (from/to/why), one short actionable pronunciation tip, and 0-4 notable words worth saving (word + short English meaning).`;
 }
 
-/**
- * Pure parsing/validation of the model's JSON text, so it is unit-testable
- * without a network call.
- * @param {string} rawJsonText
- * @param {{ user?: string }} [options]
- */
-export function parseReviewPayload(rawJsonText, { user } = {}) {
+export interface ParseReviewPayloadOptions {
+  user?: string;
+}
+
+// Pure parsing/validation of the model's JSON text, so it is unit-testable
+// without a network call. `data` is deliberately untyped past JSON.parse —
+// it's untrusted model output, validated field-by-field below rather than
+// trusted via a cast.
+export function parseReviewPayload(rawJsonText: string, { user }: ParseReviewPayloadOptions = {}): ReviewResult {
   const data = JSON.parse(rawJsonText);
-  const clamp = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+  const clamp = (n: unknown): number => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
   const scores = data.scores || {};
 
-  const result = {
+  const result: ReviewResult = {
     score: clamp(data.score),
     scores: {
       pronunciation: clamp(scores.pronunciation),
@@ -86,11 +119,17 @@ export function parseReviewPayload(rawJsonText, { user } = {}) {
     corrections: Array.isArray(data.corrections)
       ? data.corrections
           .slice(0, 3)
-          .map((c) => ({ from: String(c.from ?? ''), to: String(c.to ?? ''), why: String(c.why ?? '') }))
+          .map((c: { from?: unknown; to?: unknown; why?: unknown }) => ({
+            from: String(c.from ?? ''),
+            to: String(c.to ?? ''),
+            why: String(c.why ?? ''),
+          }))
       : [],
     tip: typeof data.tip === 'string' ? data.tip : '',
     words: Array.isArray(data.words)
-      ? data.words.slice(0, 4).map((w) => ({ word: String(w.word ?? ''), meaning: String(w.meaning ?? '') }))
+      ? data.words
+          .slice(0, 4)
+          .map((w: { word?: unknown; meaning?: unknown }) => ({ word: String(w.word ?? ''), meaning: String(w.meaning ?? '') }))
       : [],
   };
 
@@ -102,7 +141,17 @@ export function parseReviewPayload(rawJsonText, { user } = {}) {
   return result;
 }
 
-export async function review({ user, assistant, level, apiKey, model, models, fetchImpl = fetch }) {
+export interface ReviewParams {
+  user: string;
+  assistant?: string;
+  level?: string;
+  apiKey: string;
+  model?: string;
+  models?: string[];
+  fetchImpl?: typeof fetch;
+}
+
+export async function review({ user, assistant, level, apiKey, model, models, fetchImpl = fetch }: ReviewParams): Promise<ReviewResult> {
   if (!user || !user.trim()) {
     return emptyReview();
   }
