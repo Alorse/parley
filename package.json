@@ -5,7 +5,7 @@
   "description": "Voice-first English speaking tutor — PWA on top of the Gemini Live API",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=20.11"
   },
   "scripts": {
     "start": "node server/index.js",

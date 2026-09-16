@@ -35,6 +35,26 @@ Open `http://127.0.0.1:8322` in a browser. For a real mic test on a phone
 (mic access needs either `localhost` or HTTPS), use the HTTPS URL
 below, or `ngrok http 8322` / similar for local phone testing.
 
+### The Node-version trap
+
+Node **>= 22** ships a global `WebSocket`; Node 20 does not. `server/live.js`
+uses the global `WebSocket` when present and otherwise falls back to the
+`ws` package we already depend on (`resolveWebSocketImpl()`), so the app
+runs correctly on Node 20.11+ through the latest LTS.
+
+The trap: **your interactive shell's `node` and the the service manager unit's `node`
+can silently be different binaries.** This box's shell resolves `node` to a
+v26 install, while the production unit's `ExecStart=/usr/bin/node` is
+v20.20.2. A regression that only breaks on the older global-`WebSocket`-less
+runtime will pass every local test run and still take the live site down.
+Always sanity-check with the exact binary the unit runs:
+
+```bash
+/usr/bin/node --version
+/usr/bin/node --test test/*.test.js
+/usr/bin/node scripts/e2e-live.mjs
+```
+
 ### Environment variables (`.env`)
 
 | var | default | meaning |

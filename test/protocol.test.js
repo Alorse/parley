@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toUpstreamFrame, audioUpstreamFrame, textUpstreamFrame, buildSetupFrame, HalfDuplexGate } from '../server/live.js';
+import { WebSocket as WsWebSocket } from 'ws';
+import {
+  toUpstreamFrame,
+  audioUpstreamFrame,
+  textUpstreamFrame,
+  buildSetupFrame,
+  HalfDuplexGate,
+  resolveWebSocketImpl,
+  GeminiLiveSession,
+} from '../server/live.js';
 
 test('audioUpstreamFrame shapes a base64 PCM16 16kHz realtimeInput frame', () => {
   const frame = audioUpstreamFrame('QUJD');
@@ -91,4 +100,39 @@ test('HalfDuplexGate: disabled gate (hands-free mode) never gates', () => {
   const gate = new HalfDuplexGate({ enabled: false });
   gate.onAssistantAudio();
   assert.equal(gate.isGated(), false);
+});
+
+// --- WebSocket implementation fallback (Node 20 has no global WebSocket) --
+
+test('resolveWebSocketImpl uses globalThis.WebSocket when present', () => {
+  const fakeGlobal = function FakeGlobalWebSocket() {};
+  const original = globalThis.WebSocket;
+  globalThis.WebSocket = fakeGlobal;
+  try {
+    assert.equal(resolveWebSocketImpl(), fakeGlobal);
+  } finally {
+    if (original === undefined) delete globalThis.WebSocket;
+    else globalThis.WebSocket = original;
+  }
+});
+
+test('resolveWebSocketImpl falls back to the ws package when globalThis.WebSocket is absent (Node 20)', () => {
+  const original = globalThis.WebSocket;
+  delete globalThis.WebSocket;
+  try {
+    assert.equal(resolveWebSocketImpl(), WsWebSocket);
+  } finally {
+    if (original !== undefined) globalThis.WebSocket = original;
+  }
+});
+
+test('GeminiLiveSession picks up the ws-package fallback when constructed without globalThis.WebSocket', () => {
+  const original = globalThis.WebSocket;
+  delete globalThis.WebSocket;
+  try {
+    const session = new GeminiLiveSession({ apiKey: 'k', model: 'm', voice: 'Kore' });
+    assert.equal(session.WebSocketImpl, WsWebSocket);
+  } finally {
+    if (original !== undefined) globalThis.WebSocket = original;
+  }
 });

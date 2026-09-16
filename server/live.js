@@ -1,5 +1,16 @@
 import { EventEmitter } from 'node:events';
+import { WebSocket as WsWebSocket } from 'ws';
 import { buildSystemPrompt } from './tutor.js';
+
+// Node >= 22 ships a global WebSocket; Node 20 does not. The production unit
+// runs on the system node (/usr/bin/node), which may be older than the shell's,
+// so fall back to the `ws` client we already depend on instead of crashing with
+// "this.WebSocketImpl is not a constructor". Resolved as a constructor
+// default (evaluated per-call, not at module load) so tests can flip
+// globalThis.WebSocket and observe the fallback actually engage.
+export function resolveWebSocketImpl() {
+  return globalThis.WebSocket ?? WsWebSocket;
+}
 
 const UPSTREAM_BASE =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
@@ -117,7 +128,7 @@ export class GeminiLiveSession extends EventEmitter {
     nativeLanguage = 'Spanish',
     feedbackDetail = 'every-turn',
     halfDuplex = true,
-    webSocketImpl = globalThis.WebSocket,
+    webSocketImpl = resolveWebSocketImpl(),
   }) {
     super();
     this.apiKey = apiKey;
