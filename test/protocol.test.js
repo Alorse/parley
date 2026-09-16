@@ -136,3 +136,17 @@ test('GeminiLiveSession picks up the ws-package fallback when constructed withou
     if (original !== undefined) globalThis.WebSocket = original;
   }
 });
+
+test('HalfDuplexGate: re-arms correctly across many consecutive turns (fake clock)', () => {
+  let now = 0;
+  const gate = new HalfDuplexGate({ enabled: true, tailGuardMs: 400, now: () => now });
+  for (let turn = 0; turn < 5; turn++) {
+    gate.onAssistantAudio();
+    assert.equal(gate.isGated(), true, `turn ${turn}: gated while the assistant is speaking`);
+    gate.onTurnComplete();
+    assert.equal(gate.isGated(), true, `turn ${turn}: still gated immediately after turnComplete`);
+    now += 400;
+    assert.equal(gate.isGated(), false, `turn ${turn}: gate re-opens once the tail guard elapses`);
+    now += 1000; // the learner speaks for a while before the next turn starts
+  }
+});
