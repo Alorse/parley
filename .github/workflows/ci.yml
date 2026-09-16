@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+        env:
+          # server/config.js reads GOOGLE_API_KEY at import time and throws if
+          # it's unset; the unit suite never sends it anywhere over the
+          # network (see docs/DEVELOPING.md), so a placeholder is enough here
+          # — this is not a real credential.
+          GOOGLE_API_KEY: ci-placeholder-key
