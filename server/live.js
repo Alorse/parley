@@ -1,0 +1,341 @@
+import { EventEmitter } from 'node:events';
+import { buildSystemPrompt } from './tutor.js';
+
+const UPSTREAM_BASE =
+  'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
+
+const TAIL_GUARD_MS = 400;
+const THINKING_DELAY_MS = 500;
+
+export function upstreamUrl(apiKey) {
+  return `${UPSTREAM_BASE}?key=${apiKey}`;
+}
+
+export function buildSetupFrame({ model, voice }) {
+  return {
+    setup: {
+      model: `models/${model}`,
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+      },
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          disabled: false,
+          startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+          endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+          silenceDurationMs: 700,
+          prefixPaddingMs: 300,
+        },
+      },
+    },
+  };
+}
+
+export function audioUpstreamFrame(base64Data) {
+  return { realtimeInput: { audio: { data: base64Data, mimeType: 'audio/pcm;rate=16000' } } };
+}
+
+export function textUpstreamFrame(text) {
+  return { clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } };
+}
+
+// Client-message -> upstream-frame codec used both by the live session and by
+// tests. `interrupt` has no upstream wire shape: automatic activity detection
+// is always on, so interruption is handled locally (flush turn state, tell
+// the client to flush playback) rather than by sending anything upstream.
+export function toUpstreamFrame(message) {
+  switch (message.type) {
+    case 'audio':
+      return audioUpstreamFrame(message.data);
+    case 'text':
+    case 'say':
+      return textUpstreamFrame(message.text);
+    case 'interrupt':
+      return null;
+    default:
+      return null;
+  }
+}
+
+// Pure, timestamp-based half-duplex gate: while the assistant's audio is
+// playing, and for a short tail guard after it ends, incoming mic frames are
+// dropped server-side. Timestamp-based (not setTimeout-based) so it is
+// trivially unit-testable with a fake clock.
+export class HalfDuplexGate {
+  constructor({ tailGuardMs = TAIL_GUARD_MS, enabled = true, now = () => Date.now() } = {}) {
+    this.tailGuardMs = tailGuardMs;
+    this.enabled = enabled;
+    this._now = now;
+    this._speaking = false;
+    this._resumeAt = 0;
+  }
+
+  setEnabled(enabled) {
+    this.enabled = enabled;
+  }
+
+  onAssistantAudio() {
+    this._speaking = true;
+    this._resumeAt = Infinity;
+  }
+
+  onTurnComplete() {
+    this._speaking = false;
+    this._resumeAt = this._now() + this.tailGuardMs;
+  }
+
+  onInterrupted() {
+    this._speaking = false;
+    this._resumeAt = 0;
+  }
+
+  isGated() {
+    if (!this.enabled) return false;
+    if (this._speaking) return true;
+    return this._now() < this._resumeAt;
+  }
+}
+
+function freshTurn() {
+  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false };
+}
+
+// One upstream Live session per browser WebSocket connection. Emits 'client'
+// events shaped exactly like the server->client protocol in the design notes §7, and
+// 'review-request' when a non-silent turn completes (index.js wires that to
+// server/review.js).
+export class GeminiLiveSession extends EventEmitter {
+  constructor({
+    apiKey,
+    model,
+    voice,
+    scenario = 'Just talk',
+    level = 'B1',
+    nativeLanguage = 'Spanish',
+    halfDuplex = true,
+    webSocketImpl = globalThis.WebSocket,
+  }) {
+    super();
+    this.apiKey = apiKey;
+    this.model = model;
+    this.voice = voice;
+    this.scenario = scenario;
+    this.level = level;
+    this.nativeLanguage = nativeLanguage;
+    this.WebSocketImpl = webSocketImpl;
+    this.gate = new HalfDuplexGate({ enabled: halfDuplex });
+    this.ws = null;
+    this.closed = false;
+    this.reconnectAttempted = false;
+    this.turn = freshTurn();
+    this._thinkingTimer = null;
+    this._resumeTimer = null;
+  }
+
+  setHalfDuplex(enabled) {
+    this.gate.setEnabled(enabled);
+  }
+
+  setScenario(scenario) {
+    this.scenario = scenario;
+  }
+
+  async start() {
+    await this._connect();
+  }
+
+  _connect() {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const ws = new this.WebSocketImpl(upstreamUrl(this.apiKey));
+      this.ws = ws;
+
+      ws.addEventListener('open', () => {
+        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice })));
+      });
+
+      ws.addEventListener('message', (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(typeof event.data === 'string' ? event.data : event.data.toString());
+        } catch {
+          return;
+        }
+        if (msg.setupComplete && !settled) {
+          settled = true;
+          this._sendPersonaTurn();
+          this._emitClient({ type: 'ready' });
+          this._emitClient({ type: 'state', value: 'listening' });
+          resolve();
+          return;
+        }
+        this._handleUpstreamMessage(msg);
+      });
+
+      ws.addEventListener('error', () => {
+        this._emitClient({ type: 'error', message: 'Upstream connection error' });
+        if (!settled) {
+          settled = true;
+          reject(new Error('upstream error'));
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        const wasClosed = this.closed;
+        this._clearTimers();
+        if (!settled) {
+          settled = true;
+          reject(new Error('upstream closed before setup'));
+          return;
+        }
+        if (!wasClosed && !this.reconnectAttempted) {
+          this.reconnectAttempted = true;
+          this._emitClient({ type: 'reconnecting' });
+          this._connect().catch(() => {
+            this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
+          });
+        } else if (!wasClosed) {
+          this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
+        }
+      });
+    });
+  }
+
+  _sendPersonaTurn() {
+    const prompt = buildSystemPrompt({
+      scenario: this.scenario,
+      level: this.level,
+      nativeLanguage: this.nativeLanguage,
+    });
+    this.turn.silent = true;
+    this._sendUpstream(textUpstreamFrame(prompt));
+  }
+
+  _sendUpstream(frame) {
+    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) return;
+    this.ws.send(JSON.stringify(frame));
+  }
+
+  _emitClient(message) {
+    this.emit('client', message);
+  }
+
+  _clearTimers() {
+    clearTimeout(this._thinkingTimer);
+    clearTimeout(this._resumeTimer);
+    this._thinkingTimer = null;
+    this._resumeTimer = null;
+  }
+
+  _armThinkingTimer() {
+    clearTimeout(this._thinkingTimer);
+    this._thinkingTimer = setTimeout(() => {
+      this._emitClient({ type: 'state', value: 'thinking' });
+    }, THINKING_DELAY_MS);
+  }
+
+  sendAudio(base64Data) {
+    if (this.gate.isGated()) return false;
+    this._armThinkingTimer();
+    this._sendUpstream(audioUpstreamFrame(base64Data));
+    return true;
+  }
+
+  sendText(text) {
+    this._sendUpstream(textUpstreamFrame(text));
+  }
+
+  say(text) {
+    this.turn.silent = true;
+    this._sendUpstream(textUpstreamFrame(text));
+  }
+
+  interrupt() {
+    this.gate.onInterrupted();
+    this._clearTimers();
+    this.turn = freshTurn();
+    this._emitClient({ type: 'interrupted' });
+    this._emitClient({ type: 'state', value: 'listening' });
+  }
+
+  stop() {
+    this.closed = true;
+    this._clearTimers();
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  _handleUpstreamMessage(msg) {
+    if (msg.serverContent) {
+      this._handleServerContent(msg.serverContent);
+    }
+    if (msg.goAway) {
+      this._emitClient({ type: 'going-away', timeLeft: msg.goAway.timeLeft });
+    }
+    // sessionResumptionUpdate intentionally ignored.
+  }
+
+  _handleServerContent(sc) {
+    if (sc.interrupted) {
+      this.interrupt();
+      return;
+    }
+
+    const parts = sc.modelTurn?.parts || [];
+    let gotAudio = false;
+    for (const part of parts) {
+      if (part.inlineData?.data) {
+        gotAudio = true;
+        this._emitClient({ type: 'audio', data: part.inlineData.data });
+      }
+    }
+    if (gotAudio) {
+      clearTimeout(this._thinkingTimer);
+      if (!this.gate._speaking) {
+        this._emitClient({ type: 'state', value: 'speaking' });
+      }
+      this.gate.onAssistantAudio();
+    }
+
+    if (sc.inputTranscription?.text) {
+      this.turn.userText += sc.inputTranscription.text;
+      this._emitClient({ type: 'input-text', text: this.turn.userText, final: false });
+    }
+    if (sc.outputTranscription?.text) {
+      this.turn.assistantText += sc.outputTranscription.text;
+      this._emitClient({ type: 'output-text', text: this.turn.assistantText, final: false });
+    }
+
+    if (sc.turnComplete) {
+      this._onTurnComplete();
+    }
+  }
+
+  _onTurnComplete() {
+    const { userText, assistantText, startedAt, silent } = this.turn;
+    const durationMs = Date.now() - startedAt;
+    clearTimeout(this._thinkingTimer);
+    this.gate.onTurnComplete();
+
+    this._emitClient({ type: 'input-text', text: userText, final: true });
+    this._emitClient({ type: 'output-text', text: assistantText, final: true });
+
+    if (!silent) {
+      this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
+      this.emit('review-request', { user: userText, assistant: assistantText, level: this.level });
+    }
+
+    this.turn = freshTurn();
+    this._resumeTimer = setTimeout(() => {
+      this._emitClient({ type: 'state', value: 'listening' });
+    }, this.gate.tailGuardMs);
+  }
+}
