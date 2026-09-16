@@ -11,6 +11,12 @@ import { JsonStore } from './store.js';
 const PUBLIC_DIR = path.join(config.root, 'public');
 const store = new JsonStore(path.join(config.root, config.dataDir));
 
+// Ordered model chains: primary first, then fallbacks. A 429 (quota) or 503
+// (overload) on one model falls through to the next instead of failing the
+// request/session outright.
+const TEXT_MODELS = [config.geminiTextModel, ...config.geminiTextModelFallbacks];
+const LIVE_MODELS = [config.geminiLiveModel, ...config.geminiLiveModelFallbacks];
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -64,7 +70,9 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         hasApiKey: Boolean(config.googleApiKey),
         liveModel: config.geminiLiveModel,
+        liveModelFallbacks: config.geminiLiveModelFallbacks,
         textModel: config.geminiTextModel,
+        textModelFallbacks: config.geminiTextModelFallbacks,
         activeSessions,
         maxSessions: config.maxSessions,
       });
@@ -73,21 +81,21 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && req.url === '/api/review') {
       const body = await readJsonBody(req);
-      const result = await review({ ...body, apiKey: config.googleApiKey, model: config.geminiTextModel });
+      const result = await review({ ...body, apiKey: config.googleApiKey, models: TEXT_MODELS });
       sendJson(res, 200, result);
       return;
     }
 
     if (req.method === 'POST' && req.url === '/api/translate') {
       const body = await readJsonBody(req);
-      const result = await translate({ ...body, apiKey: config.googleApiKey, model: config.geminiTextModel });
+      const result = await translate({ ...body, apiKey: config.googleApiKey, models: TEXT_MODELS });
       sendJson(res, 200, result);
       return;
     }
 
     if (req.method === 'POST' && req.url === '/api/hint') {
       const body = await readJsonBody(req);
-      const result = await hint({ ...body, apiKey: config.googleApiKey, model: config.geminiTextModel });
+      const result = await hint({ ...body, apiKey: config.googleApiKey, models: TEXT_MODELS });
       sendJson(res, 200, result);
       return;
     }
@@ -148,36 +156,52 @@ wss.on('connection', (ws) => {
       const feedbackDetail = msg.feedbackDetail ?? profile.feedbackDetail ?? 'every-turn';
       store.write('profile', { scenario, level, voice, halfDuplex, feedbackDetail });
 
-      session = new GeminiLiveSession({
-        apiKey: config.googleApiKey,
-        model: config.geminiLiveModel,
-        voice,
-        scenario,
-        level,
-        halfDuplex,
-        feedbackDetail,
-      });
+      // Try each live model in the fallback chain until one actually
+      // completes setup — a model-specific outage or quota exhaustion
+      // shouldn't take the whole session down. Listeners must be attached
+      // before start() so we never miss the initial 'ready'/greeting audio.
+      let lastError;
+      for (const liveModel of LIVE_MODELS) {
+        const candidate = new GeminiLiveSession({
+          apiKey: config.googleApiKey,
+          model: liveModel,
+          voice,
+          scenario,
+          level,
+          halfDuplex,
+          feedbackDetail,
+        });
 
-      session.on('client', (clientMsg) => {
-        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(clientMsg));
-      });
+        candidate.on('client', (clientMsg) => {
+          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(clientMsg));
+        });
 
-      session.on('review-request', async (turn) => {
-        try {
-          const result = await review({ ...turn, apiKey: config.googleApiKey, model: config.geminiTextModel });
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'review', ...result }));
-        } catch (err) {
-          console.error('review failed:', err.message);
-          if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({ type: 'review', error: 'Review is unavailable right now.' }));
+        candidate.on('review-request', async (turn) => {
+          try {
+            const result = await review({ ...turn, apiKey: config.googleApiKey, models: TEXT_MODELS });
+            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'review', ...result }));
+          } catch (err) {
+            console.error('review failed:', err.message);
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify({ type: 'review', error: 'Review is unavailable right now.' }));
+            }
           }
-        }
-      });
+        });
 
-      try {
-        await session.start();
-      } catch (err) {
-        console.error('live session failed to start:', err.message);
+        try {
+          await candidate.start();
+          session = candidate;
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          candidate.stop();
+          console.error(`live session failed to start with model ${liveModel}:`, err.message);
+        }
+      }
+
+      if (!session) {
+        console.error('live session failed to start on every model fallback:', lastError && lastError.message);
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ type: 'error', message: 'Could not reach the tutor right now.' }));
         }

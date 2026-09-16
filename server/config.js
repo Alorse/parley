@@ -35,6 +35,17 @@ function loadEnvFile() {
   }
 }
 
+// Comma-separated list, trimmed and empty-entries-filtered, falling back to
+// `defaults` when the env var is unset/empty.
+function parseModelList(value, defaults) {
+  if (!value) return defaults;
+  const parsed = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parsed.length ? parsed : defaults;
+}
+
 export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
   const googleApiKey = env.GOOGLE_API_KEY || '';
   if (!googleApiKey) {
@@ -43,7 +54,13 @@ export function buildConfig(env = { ...loadEnvFile(), ...filterProcessEnv() }) {
   return {
     googleApiKey,
     geminiLiveModel: env.GEMINI_LIVE_MODEL || 'gemini-3.8-live',
+    geminiLiveModelFallbacks: parseModelList(env.GEMINI_LIVE_MODEL_FALLBACKS, ['gemini-3.1-flash-live-preview']),
     geminiTextModel: env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash',
+    geminiTextModelFallbacks: parseModelList(env.GEMINI_TEXT_MODEL_FALLBACKS, [
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-flash',
+      'gemini-3.5-flash',
+    ]),
     tutorVoice: env.TUTOR_VOICE || 'Kore',
     port: Number(env.PORT) || 8322,
     accessTokens: (env.ACCESS_TOKENS || '')
@@ -62,7 +79,9 @@ function filterProcessEnv() {
   const keys = [
     'GOOGLE_API_KEY',
     'GEMINI_LIVE_MODEL',
+    'GEMINI_LIVE_MODEL_FALLBACKS',
     'GEMINI_TEXT_MODEL',
+    'GEMINI_TEXT_MODEL_FALLBACKS',
     'TUTOR_VOICE',
     'PORT',
     'ACCESS_TOKENS',

@@ -98,13 +98,13 @@ export function parseReviewPayload(rawJsonText, { user } = {}) {
   return result;
 }
 
-export async function review({ user, assistant, level, apiKey, model, fetchImpl = fetch }) {
+export async function review({ user, assistant, level, apiKey, model, models, fetchImpl = fetch }) {
   if (!user || !user.trim()) {
     return emptyReview();
   }
 
   const prompt = buildReviewPrompt({ user, assistant, level });
-  const text = await generateContent({ apiKey, model, prompt, responseSchema: REVIEW_SCHEMA, fetchImpl });
+  const text = await generateContent({ apiKey, model, models, prompt, responseSchema: REVIEW_SCHEMA, fetchImpl });
   return parseReviewPayload(text, { user });
 }
 

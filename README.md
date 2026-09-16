@@ -61,7 +61,9 @@ Always sanity-check with the exact binary the unit runs:
 |---|---|---|
 | `GOOGLE_API_KEY` | — | required, server-side only, never sent to the client |
 | `GEMINI_LIVE_MODEL` | `gemini-3.8-live` | speech-to-speech model |
+| `GEMINI_LIVE_MODEL_FALLBACKS` | `gemini-3.1-flash-live-preview` | comma-separated live models tried in order if the primary fails to complete setup |
 | `GEMINI_TEXT_MODEL` | `gemini-3.8-flash` | review + translate + hint |
+| `GEMINI_TEXT_MODEL_FALLBACKS` | `gemini-3.1-flash-lite,gemini-2.5-flash,gemini-3.5-flash` | comma-separated text models tried in order on a 429 (quota) or 503 (overloaded) |
 | `TUTOR_VOICE` | `Kore` | prebuilt voice (Kore/Aoede/Puck/Charon/Leda) |
 | `PORT` | `8322` | listens on 127.0.0.1 (a tunnel/reverse proxy terminates TLS) |
 | `ACCESS_TOKENS` | empty | optional comma-separated bearer tokens (unused if empty) |
@@ -70,6 +72,18 @@ Always sanity-check with the exact binary the unit runs:
 
 `.env` is parsed by a ~20-line hand-rolled parser in `server/config.js` — no
 `dotenv` dependency. It is git-ignored; never commit it.
+
+### Model fallback chains
+
+Gemini's free tier enforces a **per-model** daily request quota (429
+`RESOURCE_EXHAUSTED`), and any model can occasionally answer 503
+("high demand — try again later"). Rather than surface either as a hard
+failure, `server/gemini-client.js`'s `generateContent()` walks
+`GEMINI_TEXT_MODEL_FALLBACKS` in order — review/translate/hint all use the
+same chain — and `server/index.js` does the equivalent for
+`GEMINI_LIVE_MODEL_FALLBACKS` when a `/live` session fails to complete
+upstream setup. First model that actually works wins; the failure is only
+surfaced to the user if every model in the chain fails.
 
 ## Testing
 
