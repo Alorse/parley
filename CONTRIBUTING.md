@@ -17,13 +17,16 @@ not add those trailers.
 
 ## Workflow
 
-1. Fork the repository and create a branch off `main`:
-   `feat/short-name`, `fix/short-name`, `docs/short-name` (Conventional Commits
-   prefixes — no invented ones).
-2. Make the change, one focused commit at a time, with a
+Every change lands through a pull request against `main` — never commit straight
+to `main`.
+
+1. Create a branch off `main`: `feat/short-name`, `fix/short-name`,
+   `docs/short-name`, `chore/short-name`, `refactor/short-name` (Conventional
+   Commit prefixes — no invented ones).
+2. Work on that branch, one focused commit at a time, with a
    [Conventional Commit](https://www.conventionalcommits.org/) message
-   (`feat: …`, `fix: …`, `chore: …`, `docs: …`, `test: …`).
-3. Run the tests before opening the pull request:
+   (`feat: …`, `fix: …`, `chore: …`, `docs: …`, `refactor: …`, `test: …`).
+3. Run the tests:
 
    ```bash
    npm install
@@ -32,8 +35,11 @@ not add those trailers.
    npm run browser-check  # headless Chrome with a fake microphone
    ```
 
-4. Open the pull request against `main` and describe what changed and how you
-   verified it. Screenshots are welcome for anything visual.
+4. Push the branch and open a pull request against `main`, describing what
+   changed and how you verified it. Screenshots welcome for anything visual.
+
+No push access to the repository? Fork it first, then follow the same steps from
+your fork — the branch-and-PR flow is identical.
 
 ## What this project will not do
 
