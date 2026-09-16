@@ -1,0 +1,20 @@
+{
+  "name": "parley",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Voice-first English speaking tutor — PWA on top of the Gemini Live API",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/",
+    "e2e": "node scripts/e2e-live.mjs",
+    "icons": "python3 scripts/make_icons.py"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

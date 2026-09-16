@@ -1,0 +1,15 @@
+# Node
+node_modules/
+npm-debug.log*
+*.log
+
+# Secrets
+.env
+.env.local
+*.pem
+credentials*.json
+
+# Runtime
+.data/
+tmp/
+.DS_Store
