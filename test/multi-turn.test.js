@@ -159,7 +159,11 @@ test('armSilenceNudge speaks the nudge via say() if the learner stays silent', a
   session.stop();
 });
 
-test('armSilenceNudge is disarmed by learner input (sendAudio) and never fires', async () => {
+function inputTranscriptionMessage(text) {
+  return { serverContent: { inputTranscription: { text } } };
+}
+
+test('armSilenceNudge is NOT disarmed by a raw sendAudio frame — the client streams mic audio continuously, silence included', async () => {
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
@@ -169,11 +173,34 @@ test('armSilenceNudge is disarmed by learner input (sendAudio) and never fires',
   session.nudge.delayMs = 30;
   session.armSilenceNudge();
 
-  session.sendAudio('learner-retries-before-the-nudge-fires');
+  // The browser client sends mic frames unconditionally, even while silent —
+  // a raw frame must not be mistaken for the learner actually speaking.
+  session.sendAudio('silent-mic-frame-the-client-sends-regardless');
   await delay(60);
 
   const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
-  assert.equal(nudgeFrames.length, 0, 'learner input disarmed the nudge before its delay elapsed');
+  assert.equal(nudgeFrames.length, 1, 'a raw audio frame does not disarm the nudge, so it still fires');
+
+  session.stop();
+});
+
+test('armSilenceNudge is disarmed once the learner\'s speech is actually transcribed', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  const sentBeforeNudge = ws.sent.length;
+  session.nudge.delayMs = 30;
+  session.armSilenceNudge();
+
+  // Upstream reports real transcribed speech — this is the actual "the
+  // learner started talking" signal, unlike a raw sendAudio frame.
+  ws.emitServerMessage(inputTranscriptionMessage('okay let me try'));
+  await delay(60);
+
+  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  assert.equal(nudgeFrames.length, 0, 'transcribed speech disarmed the nudge before its delay elapsed');
 
   session.stop();
 });

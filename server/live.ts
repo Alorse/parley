@@ -441,7 +441,12 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   sendAudio(base64Data: string): boolean {
-    this._disarmSilenceNudge();
+    // Deliberately does not disarm the silence nudge: the client streams mic
+    // frames continuously and unconditionally, silence included (that's the
+    // whole reason HalfDuplexGate exists — the server is what drops frames
+    // while gated). A raw frame proves nothing; only actual transcribed
+    // speech (see the inputTranscription branch below) means the learner
+    // spoke.
     if (this.gate.isGated()) return false;
     this._armThinkingTimer();
     this._sendUpstream(audioUpstreamFrame(base64Data));
@@ -537,6 +542,7 @@ export class GeminiLiveSession extends EventEmitter {
     }
 
     if (sc.inputTranscription?.text) {
+      this._disarmSilenceNudge();
       this.turn.userText += sc.inputTranscription.text;
       this._emitClient({ type: 'input-text', text: this.turn.userText, final: false });
     }
