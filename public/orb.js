@@ -139,26 +139,36 @@ export class Orb {
 
     const cx = w / 2;
     const cy = h / 2;
-    const baseRadius = Math.min(w, h) * 0.36;
+    // Kept comfortably under 0.5 (half the canvas) at every state's max
+    // ring/halo multiplier so nothing ever gets hard-clipped by the canvas
+    // edge — that clipping is what previously showed up as a visible
+    // rectangular seam around the orb.
+    const baseRadius = Math.min(w, h) * 0.32;
     const params = STATE_PARAMS[this.state];
     const level = this.reducedMotion ? 0 : this.level;
     const time = this.reducedMotion ? this.time * 0.25 : this.time;
     const breatheAmp = this.reducedMotion ? 0.02 : params.breatheAmp;
     const levelAmp = this.reducedMotion ? 0 : params.levelAmp;
 
-    // --- halo ---------------------------------------------------------
+    // --- halo -----------------------------------------------------------
+    // A radial gradient fading to exactly zero alpha at haloR, entirely
+    // inside the canvas — unlike a blurred fill, nothing ever bleeds past
+    // haloR for the canvas edge to hard-clip.
+    const haloR = baseRadius * 1.4;
+    const halo = ctx.createRadialGradient(cx, cy, baseRadius * 0.4, cx, cy, haloR);
+    halo.addColorStop(0, RING_RGBA(0.18));
+    halo.addColorStop(1, RING_RGBA(0));
     ctx.save();
-    ctx.filter = `blur(${baseRadius * 0.22}px)`;
-    ctx.fillStyle = RING_RGBA(0.16);
+    ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(cx, cy, baseRadius * 1.28, 0, Math.PI * 2);
+    ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
     // --- rings + satellites --------------------------------------------
     const ringMult = this.reducedMotion ? 1 : params.ringScale;
     const ring1r = baseRadius * 1.14 * ringMult;
-    const ring2r = baseRadius * 1.33 * ringMult;
+    const ring2r = baseRadius * 1.28 * ringMult;
     ctx.save();
     ctx.lineWidth = Math.max(1, this.dpr);
     ctx.strokeStyle = RING_RGBA(0.28);

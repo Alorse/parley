@@ -210,6 +210,9 @@ function handleReview(msg) {
   el('score-ring-fg').style.strokeDashoffset = String(offset);
   el('score-tip').textContent = msg.tip || '';
   el('score-pill').classList.remove('hidden');
+  // The score pill can land below the fold once the transcript grows long;
+  // never leave it sitting unseen behind the fixed nav.
+  el('score-pill').scrollIntoView({ behavior: 'smooth', block: 'center' });
 
   if (state.settings.saveWords && Array.isArray(msg.words)) {
     for (const w of msg.words) {
@@ -260,6 +263,7 @@ async function ensureSession() {
     })
     .then(() => {
       state.sessionStarted = true;
+      updateEndButtonState();
     })
     .finally(() => {
       connectPromise = null;
@@ -318,6 +322,7 @@ liveClient.addEventListener('close', () => {
     state.sessionStarted = false;
     state.micOn = false;
     updateMicUI();
+    updateEndButtonState();
   }
 });
 
@@ -327,6 +332,13 @@ function updateMicUI() {
   el('mic-btn').classList.toggle('on', state.micOn);
   el('mic-status').textContent = state.micOn ? 'Microphone on' : 'Microphone off';
   updateWaveformVisibility();
+}
+
+// There is nothing to end until a session actually exists — keep the
+// button in the layout (so the mic stays centered) but inert until then.
+function updateEndButtonState() {
+  el('end-btn').disabled = !state.sessionStarted;
+  el('end-control').classList.toggle('is-disabled', !state.sessionStarted);
 }
 
 el('mic-btn').addEventListener('click', async () => {
@@ -346,6 +358,7 @@ el('mic-btn').addEventListener('click', async () => {
 });
 
 el('end-btn').addEventListener('click', () => {
+  if (!state.sessionStarted) return;
   liveClient.stop();
   audioCapture.stop();
   audioPlayer.flush();
@@ -353,6 +366,7 @@ el('end-btn').addEventListener('click', () => {
   state.micOn = false;
   state.uiState = 'idle';
   updateMicUI();
+  updateEndButtonState();
   updateStatusLine();
   orb.setState('idle');
   resetTranscript();
@@ -582,6 +596,7 @@ el('settings-sheet').addEventListener('click', (e) => {
 renderStaticIcons();
 renderTopicChip();
 updateStatusLine();
+updateEndButtonState();
 renderThemeFilters();
 renderThemeGrid();
 renderWords();

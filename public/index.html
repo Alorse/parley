@@ -21,64 +21,68 @@
 
   <!-- ============================ Talk screen ============================ -->
   <main id="screen-talk" class="screen screen-talk" data-screen="talk">
-    <header class="app-header">
-      <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
-      <button id="settings-btn" class="icon-btn" type="button" aria-label="Settings" data-icon="settings"></button>
-    </header>
+    <div class="talk-top">
+      <header class="app-header">
+        <div class="brand"><span class="brand-dot" aria-hidden="true"></span><span class="brand-word">parley</span></div>
+        <button id="settings-btn" class="icon-btn" type="button" aria-label="Settings" data-icon="settings"></button>
+      </header>
 
-    <div id="topic-chip" class="topic-chip hidden"></div>
+      <div id="topic-chip" class="topic-chip hidden"></div>
 
-    <div class="orb-wrap">
-      <canvas id="orb-canvas" class="orb-canvas"></canvas>
-    </div>
-
-    <p id="status-line" class="status-line">Ready when you are</p>
-    <canvas id="waveform-canvas" class="waveform-canvas hidden" aria-hidden="true"></canvas>
-
-    <section id="transcript" class="transcript" aria-live="polite">
-      <p id="empty-prompt" class="empty-prompt">Tap the microphone and say hello</p>
-      <p id="tutor-line" class="tutor-line hidden"></p>
-      <p id="tutor-translation" class="tutor-translation hidden"></p>
-      <p id="user-line" class="user-line hidden"><span class="you-label">You</span><span id="user-line-text"></span></p>
-    </section>
-
-    <button id="score-pill" class="score-pill hidden" type="button">
-      <span class="score-ring">
-        <svg viewBox="0 0 36 36" aria-hidden="true">
-          <path class="score-ring-bg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
-          <path id="score-ring-fg" class="score-ring-fg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
-        </svg>
-        <span id="score-value" class="score-value">0</span>
-      </span>
-      <span id="score-tip" class="score-tip"></span>
-    </button>
-
-    <div class="controls-row">
-      <div class="control">
-        <button id="meaning-btn" class="control-btn control-btn--butter" type="button" aria-label="Meaning" data-icon="bubble"></button>
-        <span class="control-label">Meaning</span>
+      <div class="orb-wrap">
+        <canvas id="orb-canvas" class="orb-canvas"></canvas>
       </div>
-      <button id="mic-btn" class="mic-btn" type="button" aria-label="Toggle microphone" data-icon="mic"></button>
-      <div class="control">
-        <button id="end-btn" class="control-btn control-btn--cream" type="button" aria-label="End" data-icon="hangup"></button>
-        <span class="control-label">End</span>
+
+      <p id="status-line" class="status-line">Ready when you are</p>
+      <canvas id="waveform-canvas" class="waveform-canvas hidden" aria-hidden="true"></canvas>
+
+      <section id="transcript" class="transcript" aria-live="polite">
+        <p id="empty-prompt" class="empty-prompt">Tap the microphone and say hello</p>
+        <p id="tutor-line" class="tutor-line hidden"></p>
+        <p id="tutor-translation" class="tutor-translation hidden"></p>
+        <p id="user-line" class="user-line hidden"><span class="you-label">You</span><span id="user-line-text"></span></p>
+      </section>
+    </div>
+
+    <div class="talk-bottom">
+      <button id="score-pill" class="score-pill hidden" type="button">
+        <span class="score-ring">
+          <svg viewBox="0 0 36 36" aria-hidden="true">
+            <path class="score-ring-bg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
+            <path id="score-ring-fg" class="score-ring-fg" d="M18 2.5a15.5 15.5 0 1 1 0 31 15.5 15.5 0 1 1 0-31" />
+          </svg>
+          <span id="score-value" class="score-value">0</span>
+        </span>
+        <span id="score-tip" class="score-tip"></span>
+      </button>
+
+      <div class="controls-row">
+        <div class="control">
+          <button id="meaning-btn" class="control-btn control-btn--butter" type="button" aria-label="Meaning" data-icon="bubble"></button>
+          <span class="control-label">Meaning</span>
+        </div>
+        <button id="mic-btn" class="mic-btn" type="button" aria-label="Toggle microphone" data-icon="mic"></button>
+        <div class="control" id="end-control">
+          <button id="end-btn" class="control-btn control-btn--cream" type="button" aria-label="End" data-icon="hangup" disabled></button>
+          <span class="control-label">End</span>
+        </div>
       </div>
-    </div>
 
-    <p id="mic-status" class="mic-status">Microphone off</p>
-    <div class="quiet-actions">
-      <button id="type-instead-btn" class="quiet-btn" type="button"><span data-icon="keyboard"></span>Type instead</button>
-      <button id="hint-btn" class="quiet-btn" type="button"><span data-icon="sparkles"></span>A little help</button>
-    </div>
+      <p id="mic-status" class="mic-status">Microphone off</p>
+      <div class="quiet-actions">
+        <button id="type-instead-btn" class="quiet-btn" type="button"><span data-icon="keyboard"></span>Type instead</button>
+        <button id="hint-btn" class="quiet-btn" type="button"><span data-icon="sparkles"></span>A little help</button>
+      </div>
 
-    <form id="type-form" class="type-form hidden">
-      <input id="type-input" class="type-input" type="text" placeholder="Type what you want to say…" autocomplete="off" />
-      <button class="type-send" type="submit" aria-label="Send" data-icon="arrowUpRight"></button>
-    </form>
+      <form id="type-form" class="type-form hidden">
+        <input id="type-input" class="type-input" type="text" placeholder="Type what you want to say…" autocomplete="off" />
+        <button class="type-send" type="submit" aria-label="Send" data-icon="arrowUpRight"></button>
+      </form>
 
-    <div id="error-card" class="error-card hidden" role="alert">
-      <p id="error-message"></p>
-      <button id="error-dismiss" class="quiet-btn" type="button">Dismiss</button>
+      <div id="error-card" class="error-card hidden" role="alert">
+        <p id="error-message"></p>
+        <button id="error-dismiss" class="quiet-btn" type="button">Dismiss</button>
+      </div>
     </div>
   </main>
 

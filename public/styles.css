@@ -101,7 +101,22 @@ svg {
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
-  padding: 20px 20px calc(120px + env(safe-area-inset-bottom, 0px));
+  padding: 20px 20px calc(140px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Talk screen: two natural-height groups with justify-content:space-between
+   so any leftover viewport height becomes ONE deliberate gap between them,
+   instead of the transcript's old flex:1 centering stretching content apart
+   from both the orb above and the nav below. */
+.screen-talk {
+  justify-content: space-between;
+}
+
+.talk-top,
+.talk-bottom {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
 }
 
 .app-header {
@@ -160,16 +175,17 @@ svg {
 
 .orb-wrap {
   align-self: center;
-  width: 62vw;
-  max-width: 300px;
+  width: 68vw;
+  max-width: 320px;
   aspect-ratio: 1;
-  margin: 8px auto 18px;
+  margin: 4px auto 14px;
 }
 
 .orb-canvas {
   width: 100%;
   height: 100%;
   display: block;
+  background: transparent;
 }
 
 .status-line {
@@ -190,13 +206,11 @@ svg {
 
 .transcript {
   text-align: center;
-  flex: 1 0 auto;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 10px;
-  padding: 8px 4px;
+  padding: 8px 4px 0;
 }
 
 .empty-prompt {
@@ -341,6 +355,17 @@ svg {
 
 .control-btn--butter { background: var(--pastel-butter); color: var(--ink); }
 .control-btn--cream { background: var(--cream-raised); color: var(--ink); }
+
+/* No session yet: End has nothing to end. Kept in the layout (so the mic
+   button stays centered) but visually and functionally inert. */
+.control-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+#end-control.is-disabled .control-label {
+  opacity: 0.35;
+}
 
 .control-label {
   font-size: 12px;
