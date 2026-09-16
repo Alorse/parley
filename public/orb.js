@@ -210,23 +210,61 @@ export class Orb {
   }
 }
 
-// Slim waveform of the learner's mic (bars from a real AnalyserNode).
+// A single flowing line tracing the learner's mic — a live strip-chart of
+// real audio energy over roughly the last second, not a raw oscilloscope
+// dump of one analyser snapshot. That distinction matters: a ~256-sample
+// time-domain buffer spans only a few milliseconds, well under one cycle
+// of typical speech pitch, so plotting it directly (even decimated) still
+// shows audio-rate zero-crossings that render as a dense static block at
+// this canvas size, not a wave. Instead each frame reduces the buffer to
+// one real amplitude value (RMS+peak of the actual time-domain samples,
+// never frequency-bin data) and scrolls it into a rolling history; the
+// visible curve is a fixed sine carrier whose height at every point is
+// modulated by that real, per-moment history — genuinely audio-driven,
+// but shaped smoothly enough to read as sound instead of noise.
+const HISTORY_LEN = 48;
+const CARRIER_CYCLES = 3;
+
 export class MicWaveform {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.running = false;
     this.raf = null;
+    this.level = 0;
+    this.phase = 0;
+    this.history = new Float32Array(HISTORY_LEN);
     this._resize = this._resize.bind(this);
     this._resize();
     window.addEventListener('resize', this._resize);
   }
 
   _resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // The canvas is `display:none` (via .hidden) until the learner is
+    // actually listening, so getBoundingClientRect() is 0x0 at
+    // construction time and this would otherwise permanently wedge the
+    // canvas at a degenerate 1x1 internal resolution — every draw call
+    // then lands on a single pixel that CSS stretches across the whole
+    // element, which is exactly what read as "a bar that changes color"
+    // instead of a line. Skip the update when there's no real size yet;
+    // _ensureSize() re-checks every frame and catches it once visible.
     const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.canvas.width = Math.max(1, Math.round(rect.width * dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  }
+
+  _ensureSize() {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const targetW = Math.max(1, Math.round(rect.width * dpr));
+    const targetH = Math.max(1, Math.round(rect.height * dpr));
+    if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
+      this.canvas.width = targetW;
+      this.canvas.height = targetH;
+    }
   }
 
   start(getData) {
@@ -243,31 +281,74 @@ export class MicWaveform {
   stop() {
     this.running = false;
     if (this.raf) cancelAnimationFrame(this.raf);
+    this.level = 0;
+    this.phase = 0;
+    this.history.fill(0);
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
   _draw(data) {
+    this._ensureSize();
     const { ctx, canvas } = this;
     const w = canvas.width;
     const h = canvas.height;
+    const centerY = h / 2;
     ctx.clearRect(0, 0, w, h);
-    if (!data || !data.length) return;
 
-    const barCount = 26;
-    const step = Math.max(1, Math.floor(data.length / barCount));
-    const gap = w / barCount;
-    const barWidth = Math.max(2, gap * 0.45);
-    ctx.fillStyle = 'rgba(226,99,122,0.4)';
-    for (let i = 0; i < barCount; i++) {
-      let sum = 0;
-      for (let j = 0; j < step; j++) {
-        const idx = i * step + j;
-        sum += Math.abs((data[idx] || 128) - 128) / 128;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    let rawLevel = 0;
+    if (data && data.length) {
+      let sumSq = 0;
+      let peak = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sumSq += v * v;
+        const a = Math.abs(v);
+        if (a > peak) peak = a;
       }
-      const amp = Math.min(1, (sum / step) * 3.2);
-      const barH = Math.max(h * 0.08, amp * h);
-      const x = i * gap + (gap - barWidth) / 2;
-      ctx.fillRect(x, (h - barH) / 2, barWidth, barH);
+      rawLevel = Math.sqrt(sumSq / data.length) * 0.5 + peak * 0.5;
     }
+    const rate = rawLevel > this.level ? 0.4 : 0.08;
+    this.level += (rawLevel - this.level) * rate;
+
+    // Scroll the real envelope history left; the newest value enters on
+    // the right, like a live strip-chart reading of actual mic energy.
+    this.history.copyWithin(0, 1);
+    this.history[HISTORY_LEN - 1] = this.level;
+
+    const gainScale = reducedMotion ? 1.3 : 2.4;
+    const maxGain = reducedMotion ? 0.3 : 0.88;
+    const headroom = 0.85; // keep the wave's peaks off the canvas edge
+    const carrierCycles = reducedMotion ? 1.5 : CARRIER_CYCLES;
+
+    // The carrier always advances, but it is only ever visible where the
+    // real amplitude envelope is non-zero — silence stays flat regardless,
+    // while speech makes the humps visibly travel across the line rather
+    // than just swelling in place.
+    this.phase += reducedMotion ? 0.008 : 0.03;
+
+    const brighten = Math.min(1, this.level * 3);
+    ctx.strokeStyle = `rgba(226,99,122,${(0.4 + brighten * 0.45).toFixed(2)})`;
+    ctx.lineWidth = Math.max(1.5, h * 0.05);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    const xAt = (i) => (i / (HISTORY_LEN - 1)) * w;
+    const yAt = (i) => {
+      const amp = Math.min(maxGain, this.history[i] * gainScale);
+      const carrier = Math.sin((i / (HISTORY_LEN - 1)) * Math.PI * carrierCycles + this.phase);
+      return centerY + carrier * amp * centerY * headroom;
+    };
+
+    ctx.beginPath();
+    ctx.moveTo(xAt(0), yAt(0));
+    for (let i = 0; i < HISTORY_LEN - 1; i++) {
+      const midX = (xAt(i) + xAt(i + 1)) / 2;
+      const midY = (yAt(i) + yAt(i + 1)) / 2;
+      ctx.quadraticCurveTo(xAt(i), yAt(i), midX, midY);
+    }
+    ctx.lineTo(xAt(HISTORY_LEN - 1), yAt(HISTORY_LEN - 1));
+    ctx.stroke();
   }
 }
