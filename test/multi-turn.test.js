@@ -189,6 +189,27 @@ test('setLearnerName updates the name carried by every later review-request, onc
   session.stop();
 });
 
+// --- scenario flows into the review request (issue #8) ---------------------
+
+test('a completed turn\'s review-request payload carries the session\'s scenario, so the review can judge a role-play goodbye in context', async () => {
+  const { session, ws } = await startSession({ scenario: 'Dinner out' });
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
+  await delay(450);
+
+  ws.emitServerMessage(inputTranscriptionMessage('Goodbye, thanks for the meal!'));
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 1);
+  assert.equal(reviewRequests[0].scenario, 'Dinner out');
+
+  session.stop();
+});
+
 // --- memory note flows into the persona turn --------------------------------
 
 test('a session with a memoryNote weaves it into the persona turn sent upstream', async () => {
