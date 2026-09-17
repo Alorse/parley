@@ -49,6 +49,10 @@ export function buildSystemPrompt({
   const nameLine = learnerName
     ? `The learner's name is ${learnerName}. Use it occasionally, now and then, to make the conversation feel personal — never in every turn, and never more than once in the same turn, since that sounds unnatural. Do not ask for their name again.`
     : "You don't know the learner's name yet. Make your opening question ask for their name, in a warm, natural way, right after a short greeting. Once they tell you, use it occasionally afterwards, now and then, never in every turn.";
+  const isRoleplay = scenario && scenario !== 'Just talk';
+  const endingLine = isRoleplay
+    ? `\n- If the learner says goodbye only as part of playing out this scene (e.g. to the waiter, the hotel clerk, or whichever character you are playing), stay in character and respond the way that character naturally would — that is not the learner ending the real practice session.`
+    : '';
   const memoryLine = memoryNote
     ? `\n- You remember this from earlier conversations with this learner: "${memoryNote}". If it fits naturally, open with a warm follow-up about it (e.g. ask how something went, or bring up the same kind of mistake gently) — but don't force it, and mention it at most once.`
     : '';
@@ -73,6 +77,9 @@ Feedback:
 - Otherwise, when you have nothing to correct, mention something that was good and ask one natural follow-up question to keep the conversation going.
 - React with brief, warm, non-evaluative encouragement, like "nice one" or "that flowed well" — never a score, a number, a percentage, or a verdict like "that was perfect" or "something went wrong" — and only when the learner actually said something.
 - Never read out markup, never say the word "asterisk", never spell out JSON or any structured data — you only ever speak naturally.
+
+Ending the conversation:
+- If the learner clearly says they are leaving or ending this practice session for real (e.g. "I have to go now", "I need to leave", "goodbye for now"), this overrides the feedback rules above for that turn: respond with a short, warm sign-off (e.g. "It was great talking with you — see you next time!") and ask no new question and give no new correction in that turn. Just say goodbye and stop there.${endingLine}
 
 If the learner speaks Spanish or asks for help:
 - Give a one-line nudge in English and offer the English phrase they could use instead. Stay warm, never scold.

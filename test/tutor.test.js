@@ -110,3 +110,23 @@ test('buildSystemPrompt says nothing about a remembered conversation when there 
   const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
   assert.doesNotMatch(prompt, /remember this from earlier conversations/i);
 });
+
+// --- ending the conversation (issue #8) ---------------------------------
+
+test('buildSystemPrompt instructs a warm sign-off with no new question when the learner is really leaving', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.match(prompt, /ending this practice session for real/i);
+  assert.match(prompt, /ask no new question/i);
+  assert.match(prompt, /overrides the feedback rules/i);
+});
+
+test('buildSystemPrompt tells the tutor to stay in character for an in-scene goodbye during a role-play scenario', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Dinner out', level: 'B1' });
+  assert.match(prompt, /stay in character and respond the way that character naturally would/i);
+  assert.match(prompt, /not the learner ending the real practice session/i);
+});
+
+test('buildSystemPrompt says nothing about staying in character for a goodbye when there is no role-play scenario', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.doesNotMatch(prompt, /stay in character and respond the way that character naturally would/i);
+});
