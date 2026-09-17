@@ -25,6 +25,13 @@ function isLevel(value: string): value is Level {
   return LEVELS.has(value as Level);
 }
 
+// The one sentinel for "no fixed scenario" ('Just talk', see public/data.js's
+// JUST_TALK) — shared so review.ts and translate.ts don't each re-derive this
+// check against the raw string.
+export function isRoleplayScenario(scenario?: string): boolean {
+  return Boolean(scenario) && scenario !== 'Just talk';
+}
+
 // Builds the system prompt sent as the first clientContent turn. Kept as
 // plain English text — the model has no separate systemInstruction channel
 // in this Live API version.
@@ -38,10 +45,10 @@ export function buildSystemPrompt({
 }: BuildSystemPromptOptions = {}): string {
   const normalizedLevel = isLevel(level) ? level : 'B1';
   const guidance = LEVEL_GUIDANCE[normalizedLevel];
-  const sceneLine =
-    scenario && scenario !== 'Just talk'
-      ? `The current scenario is "${scenario}". Stay in character for this scene, drive it forward naturally, and after about six turns gently move the scene forward (e.g. toward a natural next step or a close).`
-      : 'There is no fixed scenario — just have a warm, easygoing conversation about whatever comes up.';
+  const isRoleplay = isRoleplayScenario(scenario);
+  const sceneLine = isRoleplay
+    ? `The current scenario is "${scenario}". Stay in character for this scene, drive it forward naturally, and after about six turns gently move the scene forward (e.g. toward a natural next step or a close).`
+    : 'There is no fixed scenario — just have a warm, easygoing conversation about whatever comes up.';
   const feedbackCadence =
     feedbackDetail === 'mistakes-only'
       ? 'Only mention a fix when the learner actually made a pronunciation or grammar mistake. If they spoke well, just react warmly and keep the conversation going, no correction needed.'
@@ -49,7 +56,6 @@ export function buildSystemPrompt({
   const nameLine = learnerName
     ? `The learner's name is ${learnerName}. Use it occasionally, now and then, to make the conversation feel personal — never in every turn, and never more than once in the same turn, since that sounds unnatural. Do not ask for their name again.`
     : "You don't know the learner's name yet. Make your opening question ask for their name, in a warm, natural way, right after a short greeting. Once they tell you, use it occasionally afterwards, now and then, never in every turn.";
-  const isRoleplay = scenario && scenario !== 'Just talk';
   const endingLine = isRoleplay
     ? `\n- If the learner says goodbye only as part of playing out this scene (e.g. to the waiter, the hotel clerk, or whichever character you are playing), stay in character and respond the way that character naturally would — that is not the learner ending the real practice session.`
     : '';

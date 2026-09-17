@@ -1,4 +1,5 @@
 import { generateContent, type GeminiSchema } from './gemini-client.js';
+import { isRoleplayScenario } from './tutor.js';
 
 export interface ReviewCorrection {
   from: string;
@@ -122,7 +123,7 @@ export function buildReviewPrompt({ user, assistant, level, learnerName, scenari
     ? ''
     : 'If the learner states their own name in this turn (e.g. "My name is X", "I\'m X", "Call me X"), report it in "name". Otherwise leave "name" as an empty string. Never guess or invent a name, and never report anyone\'s name but the learner\'s own.';
   const nameMention = learnerName ? '' : ", and the learner's own name if captured this turn (see above)";
-  const isRoleplay = Boolean(scenario) && scenario !== 'Just talk';
+  const isRoleplay = isRoleplayScenario(scenario);
   const endInstruction = `Also decide "endConversation": set it to true only when BOTH halves of this exact exchange are true — (1) the learner's line clearly signals they are leaving or ending this practice session for real (e.g. "I have to go", "I need to leave now", "goodbye", "talk to you later"), in English, AND (2) the tutor's reply is itself a closing goodbye with no new question (a warm sign-off, not a normal conversational turn). If either half is missing, or the farewell is not in English, set it to false.${
     isRoleplay
       ? ` The current scenario is a role-play ("${scenario}") — a goodbye said as part of playing out that scene (e.g. saying bye to a waiter, hotel clerk, or other character) is NOT the learner ending the real session, so set endConversation to false for that, even if it sounds like a genuine goodbye.`

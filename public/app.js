@@ -331,7 +331,6 @@ async function ensureSession() {
   hideError();
   state.conversationCorrections = [];
   state.hadTurn = false;
-  state.pendingEndConversation = false;
   connectPromise = liveClient
     .connect({
       scenario: state.scenario,
@@ -393,12 +392,19 @@ liveClient.addEventListener('message', (event) => {
       audioPlayer.enqueuePcm16(msg.data);
       break;
     case 'input-text':
+      // Any speech transcribed after a pending auto-close was armed belongs
+      // to a new turn started after the goodbye pair — the learner kept
+      // talking, so the close is stale and must not fire.
+      state.pendingEndConversation = false;
       updateUserLine(msg.text, msg.final);
       break;
     case 'output-text':
       updateTutorLine(msg.text, msg.final);
       break;
     case 'interrupted':
+      // The learner spoke over the tutor — clearly still engaged, so a
+      // pending auto-close (armed for the turn just interrupted) is stale.
+      state.pendingEndConversation = false;
       audioPlayer.flush();
       break;
     case 'turn-complete':
@@ -476,7 +482,6 @@ function endSession() {
   state.sessionStarted = false;
   state.micOn = false;
   state.uiState = 'idle';
-  state.pendingEndConversation = false;
   updateMicUI();
   updateEndButtonState();
   updateStatusLine();
