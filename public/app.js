@@ -321,6 +321,46 @@ el('score-sheet').addEventListener('click', (e) => {
   if (e.target === el('score-sheet')) el('score-sheet').classList.add('hidden');
 });
 
+// --- screen wake lock ------------------------------------------------------
+// Keeps the display on for a conversation's duration so a phone dimming and
+// locking doesn't stutter the session. Feature-detected and never allowed to
+// throw — browsers without it (iOS < 16.4, most desktops) just keep working
+// as they do today.
+
+let wakeLock = null;
+
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => {
+      wakeLock = null;
+    });
+  } catch {
+    // denied, unsupported for this context, or the page is hidden right now
+    // — the conversation carries on without it
+  }
+}
+
+async function releaseWakeLock() {
+  const sentinel = wakeLock;
+  wakeLock = null;
+  try {
+    await sentinel?.release();
+  } catch {
+    // already released
+  }
+}
+
+// The browser drops the lock whenever the page is hidden (see the Orb's own
+// visibilitychange listener above, for a different concern), so re-request
+// it once the app is foregrounded again while a session is still active.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.sessionStarted && !wakeLock) {
+    acquireWakeLock();
+  }
+});
+
 // --- live session orchestration -------------------------------------------
 
 let connectPromise = null;
@@ -344,6 +384,7 @@ async function ensureSession() {
     .then(() => {
       state.sessionStarted = true;
       updateEndButtonState();
+      acquireWakeLock();
     })
     .finally(() => {
       connectPromise = null;
@@ -430,6 +471,7 @@ liveClient.addEventListener('message', (event) => {
 liveClient.addEventListener('close', () => {
   finalizeConversationMemory();
   state.pendingEndConversation = false;
+  releaseWakeLock();
   if (state.sessionStarted) {
     state.sessionStarted = false;
     state.micOn = false;
@@ -473,9 +515,10 @@ el('mic-btn').addEventListener('click', async () => {
 // goodbye pair (see handleReview/the 'state' case above) — one way to end a
 // session, not two.
 function endSession() {
-  // finalizeConversationMemory() is not called here: liveClient.stop()
-  // closes the socket, which fires the 'close' listener below — the single
-  // place a session's end is actually detected, whatever caused it.
+  // finalizeConversationMemory() and releaseWakeLock() are not called here:
+  // liveClient.stop() closes the socket, which fires the 'close' listener
+  // below — the single place a session's end is actually detected, whatever
+  // caused it.
   liveClient.stop();
   audioCapture.stop();
   audioPlayer.flush();
