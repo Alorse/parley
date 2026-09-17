@@ -330,31 +330,29 @@ el('score-sheet').addEventListener('click', (e) => {
 let wakeLock = null;
 
 async function acquireWakeLock() {
-  if (!('wakeLock' in navigator)) return;
   try {
     wakeLock = await navigator.wakeLock.request('screen');
     wakeLock.addEventListener('release', () => {
       wakeLock = null;
     });
   } catch {
-    // denied, unsupported for this context, or the page is hidden right now
+    // denied, unsupported for this browser, or the page is hidden right now
     // — the conversation carries on without it
   }
 }
 
 async function releaseWakeLock() {
-  const sentinel = wakeLock;
-  wakeLock = null;
   try {
-    await sentinel?.release();
+    await wakeLock?.release();
   } catch {
     // already released
   }
 }
 
-// The browser drops the lock whenever the page is hidden (see the Orb's own
-// visibilitychange listener above, for a different concern), so re-request
-// it once the app is foregrounded again while a session is still active.
+// The browser drops the lock whenever the page is hidden (orb.js has its own
+// unrelated visibilitychange listener, for canvas pause/resume), so
+// re-request it once the app is foregrounded again while a session is
+// still active.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.sessionStarted && !wakeLock) {
     acquireWakeLock();
