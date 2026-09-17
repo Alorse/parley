@@ -46,6 +46,12 @@ const RAW_ICONS = {
   phone: `<path ${STROKE} d="M6.5 4h3l1.5 4-2 1.5a10.5 10.5 0 0 0 5.5 5.5l1.5-2 4 1.5v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4.5 6.2 2 2 0 0 1 6.5 4Z"/>`,
 
   calendar: `<rect x="4" y="5.5" width="16" height="15" rx="2" ${STROKE}/><path ${STROKE} d="M4 10h16M8 3.5v3M16 3.5v3"/><path ${STROKE} d="M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01"/>`,
+
+  // Topics: a pointed label/tag with a small ring where the badge sits.
+  tag: `<path ${STROKE} d="M6.5 7.5H15.5L20.5 12L15.5 16.5H6.5Q4 16.5 4 14.5V9.5Q4 7.5 6.5 7.5Z"/><circle ${STROKE} cx="8.7" cy="12" r="1.5"/>`,
+
+  // Vocabulary: "A to Z" — A owns the top-left corner, Z the bottom-right.
+  alphabet: `<path ${STROKE} d="M3.6 12.4L7 4.8l3.4 7.6M4.9 9.9H9.1M12.4 12H18.6L12.4 19H18.6"/>`,
 };
 
 export function iconMarkup(name) {

@@ -4,7 +4,7 @@
   "description": "Voice-first English speaking practice with a warm, patient tutor.",
   "start_url": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "portrait-primary",
   "background_color": "#181320",
   "theme_color": "#181320",
   "icons": [

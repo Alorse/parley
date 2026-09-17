@@ -16,7 +16,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin />
-<link rel="stylesheet" href="/styles.css?v=7" />
+<link rel="stylesheet" href="/styles.css?v=8" />
 </head>
 <body>
 <div id="app" class="app">
@@ -146,8 +146,8 @@
   <div class="nav-scrim" aria-hidden="true"></div>
   <nav class="tab-nav" aria-label="Screens">
     <button class="tab-btn" data-tab="talk" type="button" aria-current="page"><span data-icon="waveform"></span>Talk</button>
-    <button class="tab-btn" data-tab="themes" type="button"><span data-icon="grid"></span>Themes</button>
-    <button class="tab-btn" data-tab="words" type="button"><span data-icon="book"></span>Words</button>
+    <button class="tab-btn" data-tab="themes" type="button"><span data-icon="tag"></span>Topics</button>
+    <button class="tab-btn" data-tab="words" type="button"><span data-icon="alphabet"></span>Vocabulary</button>
   </nav>
 </div>
 
@@ -225,6 +225,15 @@
   </div>
 </div>
 
-<script type="module" src="/app.js?v=7"></script>
+<!-- ============================ Rotate guard =============================== -->
+<div id="rotate-guard" class="rotate-guard" role="alert">
+  <div class="rotate-guard-card">
+    <div class="rotate-guard-phone"></div>
+    <p class="rotate-guard-title">Turn your phone back to portrait</p>
+    <p class="rotate-guard-hint">Parley is designed for portrait mode.</p>
+  </div>
+</div>
+
+<script type="module" src="/app.js?v=8"></script>
 </body>
 </html>
