@@ -102,6 +102,10 @@ const state = {
   // memory saved when it ends — see finalizeConversationMemory().
   conversationCorrections: [],
   hadTurn: false,
+  // Set when a review comes back with endConversation: true but the
+  // goodbye audio hasn't finished playing yet (uiState isn't 'listening')
+  // — see the 'state' case below, which acts on it once playback catches up.
+  pendingEndConversation: false,
   themesFilter: 'All',
   themesQuery: '',
   wordsQuery: '',
@@ -279,6 +283,18 @@ function handleReview(msg) {
   if (msg.name && !state.profile.name) {
     state.profile = setProfileName(state.profile, msg.name);
   }
+
+  // The pair is satisfied: the learner signalled leaving and the tutor
+  // answered with its own goodbye (see review.ts's endInstruction). End the
+  // same way the End button does, but only once the goodbye has actually
+  // finished playing — otherwise wait for the 'state' handler to catch up.
+  if (msg.endConversation) {
+    if (state.uiState === 'listening') {
+      endSession();
+    } else {
+      state.pendingEndConversation = true;
+    }
+  }
 }
 
 function openScoreSheet() {
@@ -367,17 +383,28 @@ liveClient.addEventListener('message', (event) => {
       updateStatusLine();
       orb.setState(msg.value);
       updateWaveformVisibility();
+      if (msg.value === 'listening' && state.pendingEndConversation) {
+        state.pendingEndConversation = false;
+        endSession();
+      }
       break;
     case 'audio':
       audioPlayer.enqueuePcm16(msg.data);
       break;
     case 'input-text':
+      // Any speech transcribed after a pending auto-close was armed belongs
+      // to a new turn started after the goodbye pair — the learner kept
+      // talking, so the close is stale and must not fire.
+      state.pendingEndConversation = false;
       updateUserLine(msg.text, msg.final);
       break;
     case 'output-text':
       updateTutorLine(msg.text, msg.final);
       break;
     case 'interrupted':
+      // The learner spoke over the tutor — clearly still engaged, so a
+      // pending auto-close (armed for the turn just interrupted) is stale.
+      state.pendingEndConversation = false;
       audioPlayer.flush();
       break;
     case 'turn-complete':
@@ -402,6 +429,7 @@ liveClient.addEventListener('message', (event) => {
 
 liveClient.addEventListener('close', () => {
   finalizeConversationMemory();
+  state.pendingEndConversation = false;
   if (state.sessionStarted) {
     state.sessionStarted = false;
     state.micOn = false;
@@ -441,8 +469,10 @@ el('mic-btn').addEventListener('click', async () => {
   }
 });
 
-el('end-btn').addEventListener('click', () => {
-  if (!state.sessionStarted) return;
+// Reused both by the End button and by the automatic close on a satisfied
+// goodbye pair (see handleReview/the 'state' case above) — one way to end a
+// session, not two.
+function endSession() {
   // finalizeConversationMemory() is not called here: liveClient.stop()
   // closes the socket, which fires the 'close' listener below — the single
   // place a session's end is actually detected, whatever caused it.
@@ -457,6 +487,11 @@ el('end-btn').addEventListener('click', () => {
   updateStatusLine();
   orb.setState('idle');
   resetTranscript();
+}
+
+el('end-btn').addEventListener('click', () => {
+  if (!state.sessionStarted) return;
+  endSession();
 });
 
 el('meaning-btn').addEventListener('click', async () => {
@@ -719,7 +754,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=6').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=7').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

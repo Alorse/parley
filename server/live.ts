@@ -252,6 +252,7 @@ export interface ReviewRequestPayload {
   assistant: string;
   level: string;
   learnerName?: string;
+  scenario?: string;
 }
 
 // One upstream Live session per browser WebSocket connection. Emits 'client'
@@ -599,7 +600,13 @@ export class GeminiLiveSession extends EventEmitter {
 
     if (!silent) {
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
-      const payload: ReviewRequestPayload = { user: userText, assistant: assistantText, level: this.level, learnerName: this.learnerName };
+      const payload: ReviewRequestPayload = {
+        user: userText,
+        assistant: assistantText,
+        level: this.level,
+        learnerName: this.learnerName,
+        scenario: this.scenario,
+      };
       this.emit('review-request', payload);
     }
 

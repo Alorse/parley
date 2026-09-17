@@ -1,4 +1,5 @@
 import { generateContent } from './gemini-client.js';
+import { isRoleplayScenario } from './tutor.js';
 
 const MAX_CACHE_ENTRIES = 50;
 const translateCache = new Map<string, string>();
@@ -51,7 +52,7 @@ export interface HintResult {
 
 export async function hint({ scenario, level, lastTutorLine, apiKey, model, models, fetchImpl = fetch }: HintParams): Promise<HintResult> {
   const prompt = `An English learner at level ${level || 'B1'} is practising a conversation${
-    scenario && scenario !== 'Just talk' ? ` about "${scenario}"` : ''
+    isRoleplayScenario(scenario) ? ` about "${scenario}"` : ''
   }. The tutor just said: "${lastTutorLine || ''}". Suggest one short, natural English sentence the learner could say next. Reply with only that sentence, nothing else.`;
   const suggestion = (await generateContent({ apiKey, model, models, prompt, fetchImpl })).trim();
   return { hint: suggestion };
