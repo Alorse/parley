@@ -1126,3 +1126,62 @@ svg {
   .controls-row { gap: 14px; }
   .quiet-actions { gap: 12px; }
 }
+
+/* --------------------------------------------------------------------- */
+/* Rotate guard — iOS Safari ignores the manifest orientation lock, so    */
+/* this in-app overlay covers phones/tablets held sideways. Scoped to     */
+/* coarse-pointer, no-hover devices so a landscape desktop viewport       */
+/* (landscape by definition) never matches.                               */
+/* --------------------------------------------------------------------- */
+
+.rotate-guard {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+}
+
+.rotate-guard-card {
+  max-width: 280px;
+}
+
+.rotate-guard-phone {
+  width: 42px;
+  height: 72px;
+  margin: 0 auto 20px;
+  border: 2px solid var(--ink-soft);
+  border-radius: 10px;
+  animation: rotate-guard-spin 1.8s ease-in-out infinite;
+}
+
+.rotate-guard-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+.rotate-guard-hint {
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+}
+
+@keyframes rotate-guard-spin {
+  0%, 15% { transform: rotate(0deg); }
+  50%, 65% { transform: rotate(-90deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@media (orientation: landscape) and (pointer: coarse) and (hover: none) {
+  .rotate-guard {
+    display: flex;
+  }
+}
