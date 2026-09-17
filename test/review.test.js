@@ -249,6 +249,180 @@ test('review() keeps the "name" field in the response schema when learnerName is
   assert.equal(sentSchema.required.includes('name'), true);
 });
 
+// --- end-of-conversation pair (issue #8) --------------------------------
+
+test('parseReviewPayload reports endConversation=true when the model says the pair is satisfied', () => {
+  const raw = JSON.stringify({
+    understood: true,
+    score: 80,
+    scores: { pronunciation: 80, grammar: 80, fluency: 80 },
+    corrections: [],
+    tip: 'Nice pacing.',
+    words: [],
+    endConversation: true,
+  });
+  const result = parseReviewPayload(raw, { user: 'Okay, I have to go now, bye!' });
+  assert.equal(result.endConversation, true);
+});
+
+test('parseReviewPayload defaults endConversation to false when absent from the payload', () => {
+  const raw = JSON.stringify({
+    understood: true,
+    score: 80,
+    scores: { pronunciation: 80, grammar: 80, fluency: 80 },
+    corrections: [],
+    tip: 'Nice pacing.',
+    words: [],
+  });
+  const result = parseReviewPayload(raw, { user: 'I went for a walk' });
+  assert.equal(result.endConversation, false);
+});
+
+test('parseReviewPayload forces endConversation to false when the turn was not understood, even if the model said true', () => {
+  const raw = JSON.stringify({
+    understood: false,
+    score: 40,
+    scores: { pronunciation: 40, grammar: 40, fluency: 40 },
+    corrections: [],
+    tip: '',
+    words: [],
+    endConversation: true,
+  });
+  const result = parseReviewPayload(raw, { user: 'mmmff garble noise' });
+  assert.equal(result.understood, false);
+  assert.equal(result.endConversation, false, 'an unintelligible turn is never grounds to end the session');
+});
+
+test('buildReviewPrompt instructs the model to require both halves of the goodbye pair', () => {
+  const prompt = buildReviewPrompt({ user: 'I have to go now', assistant: 'See you next time!', level: 'B1' });
+  assert.match(prompt, /endConversation/);
+  assert.match(prompt, /BOTH halves/i);
+});
+
+test('buildReviewPrompt calls out the current scenario as a role-play that must not end the session on an in-character goodbye', () => {
+  const prompt = buildReviewPrompt({ user: 'Goodbye!', assistant: 'Thank you, come again!', level: 'B1', scenario: 'Dinner out' });
+  assert.match(prompt, /role-play \("Dinner out"\)/);
+  assert.match(prompt, /NOT the learner ending the real session/);
+});
+
+test('buildReviewPrompt says nothing about role-play exclusion when the scenario is "Just talk"', () => {
+  const prompt = buildReviewPrompt({ user: 'I have to go now', assistant: 'See you next time!', level: 'B1', scenario: 'Just talk' });
+  assert.doesNotMatch(prompt, /role-play/i);
+});
+
+test('review() closes the pair: understood turn, model reports endConversation true, scenario is "Just talk"', async () => {
+  const payload = {
+    understood: true,
+    score: 90,
+    scores: { pronunciation: 90, grammar: 90, fluency: 90 },
+    corrections: [],
+    tip: 'Great job today!',
+    words: [],
+    endConversation: true,
+  };
+  const result = await review({
+    user: 'Okay, I have to go now, bye!',
+    assistant: 'It was great talking with you — see you next time!',
+    level: 'B1',
+    scenario: 'Just talk',
+    apiKey: 'unused',
+    model: 'unused',
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }),
+    }),
+  });
+  assert.equal(result.endConversation, true);
+});
+
+test('review() does not close on a learner farewell with no tutor goodbye in reply', async () => {
+  const payload = {
+    understood: true,
+    score: 90,
+    scores: { pronunciation: 90, grammar: 90, fluency: 90 },
+    corrections: [],
+    tip: 'Nice.',
+    words: [],
+    endConversation: false, // the model itself must refuse: the tutor kept asking questions
+  };
+  const result = await review({
+    user: 'I have to go now, bye!',
+    assistant: "Oh wait, before you go — what's your favorite food?",
+    level: 'B1',
+    apiKey: 'unused',
+    model: 'unused',
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }),
+    }),
+  });
+  assert.equal(result.endConversation, false);
+});
+
+test('review() does not close on a tutor goodbye with no learner farewell', async () => {
+  const payload = {
+    understood: true,
+    score: 90,
+    scores: { pronunciation: 90, grammar: 90, fluency: 90 },
+    corrections: [],
+    tip: 'Nice.',
+    words: [],
+    endConversation: false, // the learner never signalled leaving
+  };
+  const result = await review({
+    user: 'Tell me more about your day.',
+    assistant: 'Goodbye, it was nice talking to you!',
+    level: 'B1',
+    apiKey: 'unused',
+    model: 'unused',
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }),
+    }),
+  });
+  assert.equal(result.endConversation, false);
+});
+
+test('review() does not close on a role-play goodbye that is part of the scene', async () => {
+  const payload = {
+    understood: true,
+    score: 90,
+    scores: { pronunciation: 90, grammar: 90, fluency: 90 },
+    corrections: [],
+    tip: 'Nice.',
+    words: [],
+    endConversation: false, // in-character goodbye inside the "Dinner out" scene
+  };
+  let sentPrompt;
+  const result = await review({
+    user: 'Goodbye, thanks for the meal!',
+    assistant: 'Thank you for dining with us — goodbye!',
+    level: 'B1',
+    scenario: 'Dinner out',
+    apiKey: 'unused',
+    model: 'unused',
+    fetchImpl: async (_url, opts) => {
+      sentPrompt = JSON.parse(opts.body).contents[0].parts[0].text;
+      return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }) };
+    },
+  });
+  assert.match(sentPrompt, /role-play \("Dinner out"\)/, 'the scenario reaches the prompt so the model can judge it in context');
+  assert.equal(result.endConversation, false);
+});
+
+test('review() does not close when the review call itself fails (fail-safe)', async () => {
+  await assert.rejects(() =>
+    review({
+      user: 'I have to go now, bye!',
+      assistant: 'Goodbye, see you next time!',
+      level: 'B1',
+      apiKey: 'unused',
+      model: 'unused',
+      fetchImpl: async () => ({ ok: false, status: 500 }),
+    }),
+  );
+});
+
 test('review() throws when the upstream request fails', async () => {
   await assert.rejects(() =>
     review({

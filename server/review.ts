@@ -29,6 +29,11 @@ export interface ReviewResult {
   // buildReviewPrompt's nameInstruction for why this never overwrites a name
   // that's already known.
   name: string;
+  // True only when this exchange is BOTH the learner signalling they are
+  // leaving AND the tutor answering with its own closing goodbye — see
+  // buildReviewPrompt's endInstruction. index.ts/live.ts end the session on
+  // this exact pair, never on either half alone.
+  endConversation: boolean;
 }
 
 // The base grading schema, without the "name" field — used once the
@@ -73,8 +78,9 @@ const REVIEW_SCHEMA_BASE: GeminiSchema = {
         required: ['word', 'meaning'],
       },
     },
+    endConversation: { type: 'BOOLEAN' },
   },
-  required: ['understood', 'score', 'scores', 'corrections', 'tip', 'words'],
+  required: ['understood', 'score', 'scores', 'corrections', 'tip', 'words', 'endConversation'],
 };
 
 const REVIEW_SCHEMA: GeminiSchema = {
@@ -96,6 +102,7 @@ function emptyReview(): ReviewResult {
     tip: 'Say something out loud and I will give you a pronunciation tip.',
     words: [],
     name: '',
+    endConversation: false,
   };
 }
 
@@ -104,16 +111,23 @@ export interface BuildReviewPromptParams {
   assistant?: string;
   level?: string;
   learnerName?: string;
+  scenario?: string;
 }
 
 // Once the learner's name is already known, nothing about it belongs in
 // the prompt or the response schema (see reviewSchemaFor) — there's
 // nothing left to ask the model to do.
-export function buildReviewPrompt({ user, assistant, level, learnerName }: BuildReviewPromptParams): string {
+export function buildReviewPrompt({ user, assistant, level, learnerName, scenario }: BuildReviewPromptParams): string {
   const nameInstruction = learnerName
     ? ''
     : 'If the learner states their own name in this turn (e.g. "My name is X", "I\'m X", "Call me X"), report it in "name". Otherwise leave "name" as an empty string. Never guess or invent a name, and never report anyone\'s name but the learner\'s own.';
   const nameMention = learnerName ? '' : ", and the learner's own name if captured this turn (see above)";
+  const isRoleplay = Boolean(scenario) && scenario !== 'Just talk';
+  const endInstruction = `Also decide "endConversation": set it to true only when BOTH halves of this exact exchange are true — (1) the learner's line clearly signals they are leaving or ending this practice session for real (e.g. "I have to go", "I need to leave now", "goodbye", "talk to you later"), in English, AND (2) the tutor's reply is itself a closing goodbye with no new question (a warm sign-off, not a normal conversational turn). If either half is missing, or the farewell is not in English, set it to false.${
+    isRoleplay
+      ? ` The current scenario is a role-play ("${scenario}") — a goodbye said as part of playing out that scene (e.g. saying bye to a waiter, hotel clerk, or other character) is NOT the learner ending the real session, so set endConversation to false for that, even if it sounds like a genuine goodbye.`
+      : ''
+  }`;
 
   const paragraphs = [
     `You are grading one turn of an English-speaking practice conversation for a learner at level ${level || 'B1'}.`,
@@ -121,7 +135,8 @@ export function buildReviewPrompt({ user, assistant, level, learnerName }: Build
     `The tutor's own reply, for context only (not ground truth about what the learner said):\n"""${assistant || ''}"""`,
     `Judge pronunciation, grammar, and fluency only from the learner's transcript above and the conversational context. Only report real errors that are actually present in the learner's text — never invent a correction. If the learner's transcript is not intelligible speech at all (empty, gibberish, or noise), set understood to false and score to 0, with no corrections — never guess a middle-of-the-range score for speech you could not actually understand.`,
     nameInstruction,
-    `Respond with JSON matching the required schema: whether the learner's speech was actually understood (boolean), an overall 0-100 score, per-category scores (pronunciation, grammar, fluency), at most 3 corrections (from/to/why), one short actionable pronunciation tip, and 0-4 notable words worth saving (word + short English meaning)${nameMention}.`,
+    endInstruction,
+    `Respond with JSON matching the required schema: whether the learner's speech was actually understood (boolean), an overall 0-100 score, per-category scores (pronunciation, grammar, fluency), at most 3 corrections (from/to/why), one short actionable pronunciation tip, 0-4 notable words worth saving (word + short English meaning)${nameMention}, and endConversation (see above).`,
   ];
 
   return paragraphs.filter(Boolean).join('\n\n');
@@ -164,6 +179,7 @@ export function parseReviewPayload(rawJsonText: string, { user }: ParseReviewPay
           .map((w: { word?: unknown; meaning?: unknown }) => ({ word: String(w.word ?? ''), meaning: String(w.meaning ?? '') }))
       : [],
     name: typeof data.name === 'string' ? data.name.trim() : '',
+    endConversation: Boolean(data.endConversation),
   };
 
   if (!user || !user.trim()) {
@@ -174,11 +190,13 @@ export function parseReviewPayload(rawJsonText: string, { user }: ParseReviewPay
   // didn't understand the turn — a hallucinated transcript can otherwise
   // still carry a plausible-looking score straight through. Same reasoning
   // applies to a "captured" name: a misheard/hallucinated turn is not
-  // grounds to (re)write the learner's identity.
+  // grounds to (re)write the learner's identity. An unintelligible turn is
+  // also never grounds to end the session.
   if (!result.understood) {
     result.score = 0;
     result.corrections = [];
     result.name = '';
+    result.endConversation = false;
   }
 
   return result;
@@ -189,6 +207,7 @@ export interface ReviewParams {
   assistant?: string;
   level?: string;
   learnerName?: string;
+  scenario?: string;
   apiKey: string;
   model?: string;
   models?: string[];
@@ -200,6 +219,7 @@ export async function review({
   assistant,
   level,
   learnerName,
+  scenario,
   apiKey,
   model,
   models,
@@ -210,7 +230,7 @@ export async function review({
       return emptyReview();
     }
 
-    const prompt = buildReviewPrompt({ user, assistant, level, learnerName });
+    const prompt = buildReviewPrompt({ user, assistant, level, learnerName, scenario });
     const text = await generateContent({ apiKey, model, models, prompt, responseSchema: reviewSchemaFor(learnerName), fetchImpl });
     return parseReviewPayload(text, { user });
   })();
