@@ -10,6 +10,7 @@
 //   point this at production without meaning to spend its quota).
 
 import { WebSocket } from 'ws';
+import { shellWeight } from './shell-weight.mjs';
 
 const argv = process.argv.slice(2);
 const base = argv.find((a) => a.startsWith('http')) ?? 'http://127.0.0.1:8399';
@@ -75,26 +76,8 @@ async function apiTiming() {
   };
 }
 
-async function shellWeight() {
-  const html = await (await fetch(base + '/')).text();
-  const assets = ['/'];
-  for (const m of html.matchAll(/(?:href|src)="(\/[^"?#]+)[^"]*"/g)) assets.push(m[1]);
-  for (const f of ['/app.js', '/orb.js', '/data.js', '/icons.js', '/live-client.js', '/audio-capture.js', '/audio-player.js', '/pcm-worklet.js', '/sw.js']) assets.push(f);
-  const rows = {};
-  let total = 0;
-  let encoded = 0;
-  for (const a of [...new Set(assets)]) {
-    const res = await fetch(base + a, { headers: { 'accept-encoding': 'gzip, br' } });
-    const buf = Buffer.from(await res.arrayBuffer());
-    rows[a] = { bytes: buf.length, encoding: res.headers.get('content-encoding') ?? 'none', cache: res.headers.get('cache-control') };
-    total += buf.length;
-    if (res.headers.get('content-encoding')) encoded++;
-  }
-  return { totalKB: +(total / 1024).toFixed(1), assets: Object.keys(rows).length, compressedResponses: encoded, rows };
-}
-
 const report = {};
 if (!argv.includes('--no-live')) report.live = await liveTiming();
 report.api = await apiTiming();
-report.shell = await shellWeight();
+report.shell = await shellWeight(base);
 console.log(JSON.stringify(report, null, 2));

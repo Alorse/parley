@@ -7,12 +7,15 @@
 // CPU and RSS from /proc. Offline; Linux only.
 //
 // Usage: node scripts/perf-server.mjs [--sessions 1,4] [--seconds 20]
+//        node scripts/perf-server.mjs --shell   (app shell bytes on the wire,
+//          with and without compression accepted)
 
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import { startFakeGemini } from '../test/harness/fake-gemini.mjs';
 import { startParley } from '../test/harness/server.mjs';
+import { shellWeight } from './shell-weight.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => {
@@ -86,4 +89,18 @@ async function run(n) {
   }
 }
 
-for (const n of COUNTS) console.log(JSON.stringify(await run(n)));
+async function shell() {
+  const gem = await startFakeGemini();
+  const srv = await startParley({ upstreamUrl: gem.url });
+  try {
+    const compressed = await shellWeight(srv.url);
+    const identity = await shellWeight(srv.url, 'identity');
+    return { wireKB: compressed.totalKB, identityKB: identity.totalKB, ...compressed };
+  } finally {
+    await srv.stop();
+    await gem.close();
+  }
+}
+
+if (argv.includes('--shell')) console.log(JSON.stringify(await shell(), null, 2));
+else for (const n of COUNTS) console.log(JSON.stringify(await run(n)));
