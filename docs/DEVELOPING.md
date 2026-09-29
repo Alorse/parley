@@ -51,6 +51,23 @@ in order — review, translate and hint all use the same chain — and
 `/live` session fails to complete upstream setup. The first model that works
 wins; the user only sees an error if the whole chain fails.
 
+## Session lifecycle records
+
+Every `/live` connection writes one-line JSON records to stdout (the service
+journal), all prefixed `live-session` and stamped with a short random `sid`:
+
+```bash
+journalctl -u parley | grep live-session             # everything
+journalctl -u parley | grep '"sid":"1a2b3c4d"'        # one conversation
+```
+
+Events: `open`, `busy`, `start`, `upstream-ready` (model, setup time),
+`upstream-error`, `upstream-close` (close code, reason, how long it was up),
+`reconnecting`, `going-away`, `gave-up`, `start-failed`, and `end` (duration,
+learner turns, reconnects, client close code). They carry lifecycle metadata
+only — never speech, transcripts, audio, the API key or resumption handles
+(`server/session-log.ts`).
+
 ## Node version
 
 The app runs on Node **20.11+** and later. Node ≥ 22 ships a global `WebSocket`;

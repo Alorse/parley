@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket as WsWebSocket } from 'ws';
 import { buildSystemPrompt } from './tutor.js';
+import { cleanReason, noopSessionLogger, type SessionLogger } from './session-log.js';
 import type {
   ClientMessage,
   GeminiAudioUpstreamFrame,
@@ -245,6 +246,7 @@ export interface GeminiLiveSessionOptions {
   learnerName?: string;
   memoryNote?: string;
   webSocketImpl?: any;
+  log?: SessionLogger;
 }
 
 export interface ReviewRequestPayload {
@@ -270,12 +272,16 @@ export class GeminiLiveSession extends EventEmitter {
   learnerName: string;
   memoryNote: string;
   WebSocketImpl: any;
+  log: SessionLogger;
   gate: HalfDuplexGate;
   nudge: SilenceNudge;
   ws: any;
   closed: boolean;
   reconnectAttempted: boolean;
+  reconnects: number;
   turn: Turn;
+  // Learner turns only (silent persona/say turns excluded); lifecycle logging.
+  turnsCompleted: number;
   private _thinkingTimer: NodeJS.Timeout | undefined;
   private _resumeTimer: NodeJS.Timeout | undefined;
   private _nudgeTimer: NodeJS.Timeout | undefined;
@@ -300,6 +306,7 @@ export class GeminiLiveSession extends EventEmitter {
     learnerName = '',
     memoryNote = '',
     webSocketImpl = resolveWebSocketImpl(),
+    log = noopSessionLogger,
   }: GeminiLiveSessionOptions) {
     super();
     this.apiKey = apiKey;
@@ -312,6 +319,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.learnerName = learnerName;
     this.memoryNote = memoryNote;
     this.WebSocketImpl = webSocketImpl;
+    this.log = log;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
     this.nudge = new SilenceNudge();
     // The persona/greeting turn is sent as soon as setup completes, before
@@ -324,7 +332,9 @@ export class GeminiLiveSession extends EventEmitter {
     this.ws = null;
     this.closed = false;
     this.reconnectAttempted = false;
+    this.reconnects = 0;
     this.turn = freshTurn();
+    this.turnsCompleted = 0;
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
@@ -356,6 +366,8 @@ export class GeminiLiveSession extends EventEmitter {
   private _connect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      const connectStartedAt = Date.now();
+      let setupAt = 0;
       // `this.WebSocketImpl` is either the DOM/undici global WebSocket or the
       // `ws` package's WebSocket depending on the Node runtime (see
       // resolveWebSocketImpl above) — their type declarations disagree on the
@@ -382,6 +394,8 @@ export class GeminiLiveSession extends EventEmitter {
         }
         if (msg.setupComplete && !settled) {
           settled = true;
+          setupAt = Date.now();
+          this.log('upstream-ready', { model: this.model, setupMs: setupAt - connectStartedAt });
           this._sendPersonaTurn();
           this._emitClient({ type: 'ready' });
           // No 'listening' state here: the persona turn is already in
@@ -394,6 +408,7 @@ export class GeminiLiveSession extends EventEmitter {
       });
 
       ws.addEventListener('error', () => {
+        this.log('upstream-error', { model: this.model, afterSetup: settled });
         this._emitClient({ type: 'error', message: 'Upstream connection error' });
         if (!settled) {
           settled = true;
@@ -401,8 +416,16 @@ export class GeminiLiveSession extends EventEmitter {
         }
       });
 
-      ws.addEventListener('close', () => {
+      ws.addEventListener('close', (event: any) => {
         const wasClosed = this.closed;
+        this.log('upstream-close', {
+          model: this.model,
+          code: event?.code,
+          reason: cleanReason(event?.reason),
+          byServer: wasClosed,
+          afterSetup: settled,
+          upMs: setupAt ? Date.now() - setupAt : null,
+        });
         this._clearTimers();
         if (!settled) {
           settled = true;
@@ -411,11 +434,15 @@ export class GeminiLiveSession extends EventEmitter {
         }
         if (!wasClosed && !this.reconnectAttempted) {
           this.reconnectAttempted = true;
+          this.reconnects += 1;
+          this.log('reconnecting', { attempt: this.reconnects, resume: false });
           this._emitClient({ type: 'reconnecting' });
           this._connect().catch(() => {
+            this.log('gave-up', { reason: 'reconnect-failed' });
             this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
           });
         } else if (!wasClosed) {
+          this.log('gave-up', { reason: 'reconnect-limit' });
           this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
         }
       });
@@ -533,6 +560,7 @@ export class GeminiLiveSession extends EventEmitter {
       this._handleServerContent(msg.serverContent);
     }
     if (msg.goAway) {
+      this.log('going-away', { timeLeft: msg.goAway.timeLeft });
       this._emitClient({ type: 'going-away', timeLeft: msg.goAway.timeLeft });
     }
     // sessionResumptionUpdate intentionally ignored.
@@ -599,6 +627,7 @@ export class GeminiLiveSession extends EventEmitter {
     }
 
     if (!silent) {
+      this.turnsCompleted += 1;
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
       const payload: ReviewRequestPayload = {
         user: userText,

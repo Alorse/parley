@@ -9,6 +9,7 @@ import { review, type ReviewParams } from './review.js';
 import { translate, hint, type TranslateParams, type HintParams } from './translate.js';
 import { JsonStore } from './store.js';
 import { warmUp } from './warmup.js';
+import { createSessionLogger, newSessionId } from './session-log.js';
 import type { ClientMessage, LiveEventMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
@@ -157,13 +158,18 @@ interface StoredProfile {
 }
 
 wss.on('connection', (ws) => {
+  const sid = newSessionId();
+  const log = createSessionLogger(sid);
   if (activeSessions >= config.maxSessions) {
+    log('busy', { active: activeSessions, max: config.maxSessions });
     ws.send(JSON.stringify({ type: 'error', message: 'Parley is busy right now — try again in a minute.', code: 'busy' }));
     ws.close();
     return;
   }
 
   activeSessions += 1;
+  const openedAt = Date.now();
+  log('open', { active: activeSessions, max: config.maxSessions });
   let session: GeminiLiveSession | null = null;
   let alive = true;
 
@@ -208,6 +214,7 @@ wss.on('connection', (ws) => {
       // shouldn't take the whole session down. Listeners must be attached
       // before start() so we never miss the initial 'ready'/greeting audio.
       let lastError: unknown;
+      log('start', { level, voice, halfDuplex, feedbackDetail });
       for (const liveModel of LIVE_MODELS) {
         const candidate = new GeminiLiveSession({
           apiKey: config.googleApiKey,
@@ -219,6 +226,7 @@ wss.on('connection', (ws) => {
           feedbackDetail,
           learnerName: name,
           memoryNote,
+          log,
         });
 
         candidate.on('client', (clientMsg: LiveEventMessage) => {
@@ -247,12 +255,12 @@ wss.on('connection', (ws) => {
         } catch (err) {
           lastError = err;
           candidate.stop();
-          console.error(`live session failed to start with model ${liveModel}:`, errorMessage(err));
+          log('start-failed', { model: liveModel, error: errorMessage(err) });
         }
       }
 
       if (!session) {
-        console.error('live session failed to start on every model fallback:', lastError ? errorMessage(lastError) : undefined);
+        log('start-failed-all', { error: lastError ? errorMessage(lastError) : null });
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ type: 'error', message: 'Could not reach the tutor right now.' }));
         }
@@ -269,10 +277,19 @@ wss.on('connection', (ws) => {
     else if (msg.type === 'stop') session.stop();
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     alive = false;
     clearInterval(pingInterval);
     activeSessions -= 1;
+    log('end', {
+      clientCode: code,
+      durationMs: Date.now() - openedAt,
+      started: Boolean(session),
+      model: session?.model,
+      turns: session?.turnsCompleted ?? 0,
+      reconnects: session?.reconnects ?? 0,
+      active: activeSessions,
+    });
     if (session) session.stop();
   });
 });

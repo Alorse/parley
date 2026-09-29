@@ -245,6 +245,50 @@ test('#13 a second start on the same socket does not open a second upstream sess
   assert.equal(tags.size, 1, 'two voices interleaved into one client');
 });
 
+// --- #21: lifecycle records in the journal -----------------------------------
+
+function lifecycleRecords() {
+  return srv.logs
+    .join('')
+    .split('\n')
+    .filter((l) => l.startsWith('live-session '))
+    .map((l) => JSON.parse(l.slice('live-session '.length)));
+}
+
+test('#21 a session writes lifecycle records (open, ready, upstream drop, end) and nothing sensitive', async () => {
+  resetFake();
+  const base = gem.sessions.length;
+  const { ws, events, closed } = await connect();
+  ws.send(JSON.stringify({ type: 'start' }));
+  await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const stop = streamMic(ws);
+  await delay(100);
+  newSessions(base)[0].drop(1011, 'Internal error encountered (#21).');
+  await waitFor(() => events.some((e) => e.type === 'reconnecting'));
+  stop();
+  ws.close();
+  await closed;
+  // Other tests drop upstreams too; this one's close reason is unique.
+  const mine = () => {
+    const all = lifecycleRecords();
+    const sid = all.find((r) => r.event === 'upstream-close' && r.reason === 'Internal error encountered (#21).')?.sid;
+    return all.filter((r) => r.sid === sid);
+  };
+  assert.ok(await waitFor(() => mine().some((r) => r.event === 'end')), 'end record written');
+  const kinds = mine().map((r) => r.event);
+  for (const e of ['open', 'start', 'upstream-ready', 'upstream-close', 'reconnecting', 'end']) assert.ok(kinds.includes(e), `missing ${e} in ${kinds}`);
+  const drop = mine().find((r) => r.event === 'upstream-close');
+  assert.equal(drop.code, 1011);
+  assert.equal(typeof drop.upMs, 'number');
+  const end = mine().find((r) => r.event === 'end');
+  assert.equal(typeof end.durationMs, 'number');
+  assert.ok(end.reconnects >= 1);
+  const text = srv.logs.join('');
+  assert.ok(!text.includes('harness-fake-key'), 'the API key must never be logged');
+  assert.ok(!text.includes(LOUD_FRAME.slice(0, 64)), 'audio must never be logged');
+  assert.ok(!text.includes(PERSONA_PREFIX), 'the persona prompt must never be logged');
+});
+
 // --- UX: the 'thinking' state ------------------------------------------------
 
 test("the client sees a 'thinking' state between the learner's turn and the tutor's answer", { todo: "the thinking timer is re-armed by every mic frame, so it never fires while the mic streams" }, async () => {
