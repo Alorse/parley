@@ -375,8 +375,8 @@ test('#20 a conversation nobody takes part in is closed after the idle limit, an
       if (talker.ws.readyState === talker.ws.OPEN) talker.ws.send(micFrame(n++ < 16 ? LOUD_PCM : QUIET_PCM, true));
     }, 32);
     try {
-      assert.ok(await waitFor(() => talker.events.some((e) => e.type === 'input-text'), 3000), 'speech was transcribed');
-      const heardAt = talker.events.find((e) => e.type === 'input-text').at;
+      assert.ok(await waitFor(() => talker.events.some((e) => e.type === 'input-text' && e.text), 3000), 'speech was transcribed');
+      const heardAt = talker.events.find((e) => e.type === 'input-text' && e.text).at;
       // Past the limit counted from the start, well inside the one counted from the speech.
       assert.ok(heardAt < startedAt + 2600, 'the speech came too late to tell the two limits apart');
       await delay(Math.max(heardAt + 1000, startedAt + 3300) - Date.now());
