@@ -11,7 +11,7 @@ import { JsonStore } from './store.js';
 import { warmUp } from './warmup.js';
 import { createSessionLogger, newSessionId } from './session-log.js';
 import { compressed, etagMatches, negotiateEncoding, worthCompressing } from './compress.js';
-import type { ClientMessage, LiveEventMessage } from './protocol.js';
+import { encodeServerMessage, parseClientFrame, type LiveEventMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
 const store = new JsonStore(path.join(config.root, config.dataDir));
@@ -195,6 +195,9 @@ wss.on('connection', (ws) => {
   let endReason = 'client-closed';
   let alive = true;
   let clientId = '';
+  // Set from `start`: false for a stale cached client that only speaks
+  // JSON/base64 audio (#24).
+  let binaryAudio = false;
 
   // Frees this connection's MAX_SESSIONS slot exactly once, as soon as the
   // session is known to be over rather than when the close handshake ends.
@@ -259,13 +262,9 @@ wss.on('connection', (ws) => {
     alive = true;
   });
 
-  ws.on('message', async (raw) => {
-    let msg: ClientMessage;
-    try {
-      msg = JSON.parse(raw.toString()) as ClientMessage;
-    } catch {
-      return;
-    }
+  ws.on('message', async (raw, isBinary) => {
+    const msg = parseClientFrame(raw as Buffer, isBinary);
+    if (!msg) return;
 
     if (msg.type !== 'audio') noteActivity();
 
@@ -280,6 +279,7 @@ wss.on('connection', (ws) => {
         return;
       }
       started = true;
+      binaryAudio = msg.binary === true;
       if (typeof msg.clientId === 'string' && msg.clientId && msg.clientId.length <= MAX_CLIENT_ID_LENGTH) {
         clientId = msg.clientId;
         conversationsByClient.get(clientId)?.();
@@ -328,7 +328,7 @@ wss.on('connection', (ws) => {
           // Only the running transcript is speech arriving; the final copy
           // is re-sent at every turn end, the tutor's own turns included.
           if (clientMsg.type === 'input-text' && !clientMsg.final) noteActivity();
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(clientMsg));
+          if (ws.readyState === ws.OPEN) ws.send(encodeServerMessage(clientMsg, binaryAudio));
         });
 
         candidate.on('review-request', async (turn: ReviewRequestPayload) => {

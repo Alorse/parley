@@ -55,12 +55,20 @@ function resetFake(overrides = {}) {
   });
 }
 
+// Audio events carry the chunk's session tag, its PCM size and whether it
+// came as a binary frame (#24) or as JSON/base64 (a client that doesn't
+// announce `binary` in its start, like a stale cached app).
 async function connect() {
   const ws = new WebSocket(srv.wsUrl);
   const events = [];
-  ws.on('message', (raw) => {
+  ws.on('message', (raw, isBinary) => {
+    if (isBinary) {
+      events.push({ at: Date.now(), type: 'audio', binary: true, tag: raw.readInt16LE(0), bytes: raw.length });
+      return;
+    }
     const m = JSON.parse(raw.toString());
-    events.push({ at: Date.now(), ...m, ...(m.type === 'audio' ? { tag: tagOfChunk(m.data), data: undefined } : {}) });
+    const audio = m.type === 'audio' ? { binary: false, tag: tagOfChunk(m.data), bytes: Buffer.from(m.data, 'base64').length, data: undefined } : {};
+    events.push({ at: Date.now(), ...m, ...audio });
   });
   await new Promise((resolve, reject) => {
     ws.once('open', resolve);
@@ -71,16 +79,21 @@ async function connect() {
 }
 
 const newSessions = (base) => gem.sessions.slice(base);
-const LOUD_FRAME = (() => {
+const LOUD_PCM = (() => {
   const b = Buffer.alloc(1024);
   for (let i = 0; i < b.length; i += 2) b.writeInt16LE(i % 4 ? 8000 : -8000, i);
-  return b.toString('base64');
+  return b;
 })();
-const QUIET_FRAME = Buffer.alloc(1024).toString('base64');
+const QUIET_PCM = Buffer.alloc(1024);
+const LOUD_FRAME = LOUD_PCM.toString('base64');
+const QUIET_FRAME = QUIET_PCM.toString('base64');
 
-function streamMic(ws, ms = 32) {
+// One mic chunk as the current app sends it (binary) or an older one (JSON).
+const micFrame = (pcm, binary) => (binary ? pcm : JSON.stringify({ type: 'audio', data: pcm.toString('base64') }));
+
+function streamMic(ws, ms = 32, binary = false) {
   const iv = setInterval(() => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'audio', data: LOUD_FRAME }));
+    if (ws.readyState === ws.OPEN) ws.send(micFrame(LOUD_PCM, binary));
   }, ms);
   return () => clearInterval(iv);
 }
@@ -91,17 +104,67 @@ async function health() {
 
 // --- baseline: behaviour that already works and must keep working ---------
 
-test('one start opens exactly one upstream session, and every audio chunk the client gets comes from it', async () => {
+for (const binary of [true, false]) {
+  test(`one start opens exactly one upstream session, and every audio chunk the client gets comes from it (${binary ? 'binary audio' : 'JSON audio, older client'})`, async () => {
+    resetFake();
+    const base = gem.sessions.length;
+    const { ws, events } = await connect();
+    ws.send(JSON.stringify({ type: 'start', ...(binary ? { binary } : {}) }));
+    assert.ok(await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening')), 'greeting completes');
+    const mine = newSessions(base);
+    assert.equal(mine.length, 1);
+    const audio = events.filter((e) => e.type === 'audio');
+    assert.deepEqual([...new Set(audio.map((e) => e.tag))], [sessionTag(mine[0].id)]);
+    assert.ok(audio.every((e) => e.binary === binary), `every audio chunk arrives as ${binary ? 'a binary frame' : 'JSON'}`);
+    ws.close();
+  });
+}
+
+// --- #24: audio as binary frames, JSON kept for an older client ------------------
+
+test('#24 binary mic frames reach Gemini as the same PCM and are heard as speech', async () => {
   resetFake();
   const base = gem.sessions.length;
   const { ws, events } = await connect();
-  ws.send(JSON.stringify({ type: 'start' }));
-  assert.ok(await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening')), 'greeting completes');
-  const mine = newSessions(base);
-  assert.equal(mine.length, 1);
-  const tags = new Set(events.filter((e) => e.type === 'audio').map((e) => e.tag));
-  assert.deepEqual([...tags], [sessionTag(mine[0].id)]);
-  ws.close();
+  ws.send(JSON.stringify({ type: 'start', binary: true }));
+  await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const [s] = newSessions(base);
+  const before = s.audioFrames.length;
+  let n = 0;
+  const iv = setInterval(() => ws.send(micFrame(n++ < 16 ? LOUD_PCM : QUIET_PCM, true)), 32);
+  try {
+    assert.ok(await waitFor(() => events.some((e) => e.type === 'input-text' && e.text.startsWith('heard')), 3000), 'the speech was transcribed');
+  } finally {
+    clearInterval(iv);
+    ws.close();
+  }
+  const frames = s.audioFrames.slice(before);
+  assert.ok(frames.length >= 16, `${frames.length} frames`);
+  assert.ok(frames.every((f) => f.bytes === 1024), 'each frame arrives whole');
+  assert.ok(frames.slice(0, 16).every((f) => f.rms > 0.2), 'and with its samples intact');
+});
+
+test('#24 the same reply costs about a quarter less on the wire as binary frames than as JSON', async () => {
+  const wireBytes = async (binary) => {
+    resetFake();
+    const ws = new WebSocket(srv.wsUrl);
+    let audioBytes = 0;
+    let done = false;
+    ws.on('message', (raw, isBinary) => {
+      const m = isBinary ? null : JSON.parse(raw.toString());
+      if (isBinary || m.type === 'audio') audioBytes += raw.length;
+      if (m?.type === 'state' && m.value === 'listening') done = true;
+    });
+    await new Promise((resolve) => ws.once('open', resolve));
+    ws.send(JSON.stringify({ type: 'start', ...(binary ? { binary } : {}) }));
+    await waitFor(() => done);
+    ws.close();
+    return audioBytes;
+  };
+  const binary = await wireBytes(true);
+  const json = await wireBytes(false);
+  assert.equal(binary, 0.64 * OUTPUT_BYTES_PER_SECOND, 'binary frames carry the PCM and nothing else');
+  assert.ok(binary / json < 0.76, `binary ${binary} B vs JSON ${json} B`);
 });
 
 test('the persona travels in the setup, the kickoff turn is sent once, and mic audio is held back until the greeting has played', async () => {
@@ -306,7 +369,7 @@ test('#20 a conversation nobody takes part in is closed after the idle limit, an
   const connectTo = async () => {
     const ws = new WebSocket(quiet.wsUrl);
     const events = [];
-    ws.on('message', (raw) => events.push({ at: Date.now(), ...JSON.parse(raw.toString()) }));
+    ws.on('message', (raw, isBinary) => isBinary || events.push({ at: Date.now(), ...JSON.parse(raw.toString()) }));
     await new Promise((resolve) => ws.once('open', resolve));
     return { ws, events, closed: new Promise((resolve) => ws.once('close', resolve)) };
   };
@@ -316,12 +379,11 @@ test('#20 a conversation nobody takes part in is closed after the idle limit, an
     // A learner who says one thing, then leaves the mic streaming silence.
     const talker = await connectTo();
     const startedAt = Date.now();
-    talker.ws.send(JSON.stringify({ type: 'start' }));
+    talker.ws.send(JSON.stringify({ type: 'start', binary: true }));
     await waitFor(() => talker.events.some((e) => e.type === 'state' && e.value === 'listening'));
-    const silence = Buffer.alloc(1024).toString('base64');
     let n = 0;
     const iv = setInterval(() => {
-      if (talker.ws.readyState === talker.ws.OPEN) talker.ws.send(JSON.stringify({ type: 'audio', data: n++ < 16 ? LOUD_FRAME : silence }));
+      if (talker.ws.readyState === talker.ws.OPEN) talker.ws.send(micFrame(n++ < 16 ? LOUD_PCM : QUIET_PCM, true));
     }, 32);
     try {
       assert.ok(await waitFor(() => talker.events.some((e) => e.type === 'input-text'), 3000), 'speech was transcribed');
@@ -538,19 +600,19 @@ test("#30 the client sees a 'thinking' state between the learner's turn and the 
 // heard `outputLatencyMs` later (a Bluetooth speaker: ~250 ms) and, while
 // that playback plus a short room tail lasts, streams loud frames; silence
 // otherwise. Returns how many learner turns Gemini heard.
-async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 250, tailMs = 150 } = {}) {
+async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 250, tailMs = 150, binary = false } = {}) {
   const base = gem.sessions.length;
   const { ws, events } = await connect();
   let playsUntil = 0;
-  ws.on('message', (raw) => {
-    const m = JSON.parse(raw.toString());
+  ws.on('message', () => {
+    const m = events.at(-1);
     if (m.type !== 'audio') return;
-    const playMs = (Buffer.from(m.data, 'base64').length / OUTPUT_BYTES_PER_SECOND) * 1000;
+    const playMs = (m.bytes / OUTPUT_BYTES_PER_SECOND) * 1000;
     playsUntil = Math.max(playsUntil, Date.now() + lookaheadMs + outputLatencyMs) + playMs;
   });
-  ws.send(JSON.stringify({ type: 'start' }));
+  ws.send(JSON.stringify({ type: 'start', ...(binary ? { binary } : {}) }));
   const iv = setInterval(() => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'audio', data: Date.now() < playsUntil + tailMs ? LOUD_FRAME : QUIET_FRAME }));
+    if (ws.readyState === ws.OPEN) ws.send(micFrame(Date.now() < playsUntil + tailMs ? LOUD_PCM : QUIET_PCM, binary));
   }, 32);
   await delay(ms);
   clearInterval(iv);
@@ -560,11 +622,13 @@ async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 2
 }
 
 for (const burst of [false, true]) {
-  test(`#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (${burst ? 'burst reply, like gemini-3.8-live' : 'streamed reply'})`, async () => {
-    resetFake({ replySeconds: 0.64, burst });
-    const { phantomTurns } = await echoingClient();
-    assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
-  });
+  for (const binary of [true, false]) {
+    test(`#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (${burst ? 'burst reply, like gemini-3.8-live' : 'streamed reply'}, ${binary ? 'binary' : 'JSON'} audio)`, async () => {
+      resetFake({ replySeconds: 0.64, burst });
+      const { phantomTurns } = await echoingClient({ binary });
+      assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
+    });
+  }
 }
 
 test('#27 a turn heard only as a murmur is not scored or counted, and a real one still is', async () => {

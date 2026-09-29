@@ -1,6 +1,12 @@
 // Shared wire-protocol types for the /live WebSocket, split into the two
 // directions of travel. Mirrors test/protocol.test.js, which is the source
 // of truth for the exact shapes below — keep the two in sync.
+//
+// Audio travels as binary WebSocket frames of raw PCM16 mono (#24): 16 kHz
+// from the mic, 24 kHz from the tutor. Everything else is a JSON text frame.
+// A client whose `start` doesn't say `binary: true` (a stale cached app from
+// before binary frames) sends and gets `{type:'audio', data:<base64>}`
+// instead; the server takes both.
 import type { ReviewResult } from './review.js';
 
 // --- browser -> server ------------------------------------------------------
@@ -22,8 +28,11 @@ export interface StartMessage {
   // its tabs and the installed app. A newer conversation with the same id
   // takes over from the older one (#19).
   clientId?: string;
+  // The client takes the tutor's audio as binary frames (#24).
+  binary?: boolean;
 }
 
+// A binary mic frame is decoded to this, same as the JSON form.
 export interface AudioMessage {
   type: 'audio';
   data: string;
@@ -121,6 +130,27 @@ export type LiveEventMessage =
 export type ReviewMessage = ({ type: 'review' } & ReviewResult) | { type: 'review'; error: string };
 
 export type ServerMessage = LiveEventMessage | ReviewMessage;
+
+// --- codec --------------------------------------------------------------------
+
+// One /live frame from the browser; null if it is not valid JSON.
+export function parseClientFrame(raw: Buffer, isBinary: boolean): ClientMessage | null {
+  // The upstream takes base64 in JSON, so the mic's bytes are encoded once
+  // here, on the server, instead of in the browser and on the wire.
+  if (isBinary) return { type: 'audio', data: raw.toString('base64') };
+  try {
+    return JSON.parse(raw.toString()) as ClientMessage;
+  } catch {
+    return null;
+  }
+}
+
+// One /live frame to the browser: tutor audio as raw PCM for a client that
+// announced `binary`, JSON for everything else.
+export function encodeServerMessage(message: ServerMessage, binaryAudio: boolean): string | Buffer {
+  if (binaryAudio && message.type === 'audio') return Buffer.from(message.data, 'base64');
+  return JSON.stringify(message);
+}
 
 // --- Gemini Live upstream (server <-> generativelanguage) --------------------
 

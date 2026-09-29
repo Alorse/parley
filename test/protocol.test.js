@@ -13,6 +13,7 @@ import {
   resolveWebSocketImpl,
   GeminiLiveSession,
 } from '../server/live.js';
+import { parseClientFrame, encodeServerMessage } from '../server/protocol.js';
 
 test('audioUpstreamFrame shapes a base64 PCM16 16kHz realtimeInput frame', () => {
   const frame = audioUpstreamFrame('QUJD');
@@ -49,6 +50,53 @@ test('toUpstreamFrame codec: interrupt has no upstream wire shape (handled local
 
 test('toUpstreamFrame codec: unknown message types are ignored', () => {
   assert.equal(toUpstreamFrame({ type: 'stop' }), null);
+});
+
+// --- #24: audio as binary WebSocket frames --------------------------------------
+
+const PCM = Buffer.from([0x10, 0x27, 0xf0, 0xd8, 0x00, 0x00, 0xff, 0x7f]);
+
+test('parseClientFrame: a binary frame is mic audio, re-encoded as base64 for the upstream', () => {
+  const msg = parseClientFrame(PCM, true);
+  assert.deepEqual(msg, { type: 'audio', data: PCM.toString('base64') });
+  assert.deepEqual(toUpstreamFrame(msg), audioUpstreamFrame(PCM.toString('base64')));
+});
+
+test('parseClientFrame: the JSON/base64 audio frame of an older client still decodes to the same message', () => {
+  const legacy = Buffer.from(JSON.stringify({ type: 'audio', data: PCM.toString('base64') }));
+  assert.deepEqual(parseClientFrame(legacy, false), parseClientFrame(PCM, true));
+});
+
+test('parseClientFrame: control messages are JSON text frames; anything else is ignored', () => {
+  const start = { type: 'start', level: 'B2', binary: true };
+  assert.deepEqual(parseClientFrame(Buffer.from(JSON.stringify(start)), false), start);
+  assert.equal(parseClientFrame(Buffer.from('not json'), false), null);
+});
+
+test('encodeServerMessage: tutor audio is sent as raw PCM to a client that announced binary', () => {
+  const out = encodeServerMessage({ type: 'audio', data: PCM.toString('base64') }, true);
+  assert.ok(Buffer.isBuffer(out));
+  assert.deepEqual(out, PCM);
+});
+
+test('encodeServerMessage: an older client gets the JSON/base64 audio frame', () => {
+  const msg = { type: 'audio', data: PCM.toString('base64') };
+  assert.equal(encodeServerMessage(msg, false), JSON.stringify(msg));
+});
+
+test('encodeServerMessage: control messages stay JSON either way', () => {
+  for (const msg of [{ type: 'state', value: 'speaking' }, { type: 'review', error: 'x' }, { type: 'ready' }]) {
+    assert.equal(encodeServerMessage(msg, true), JSON.stringify(msg));
+  }
+});
+
+test('#24 binary audio is about a quarter smaller than JSON/base64 in both directions', () => {
+  const mic = Buffer.alloc(1024, 7); // one 32 ms mic chunk
+  const reply = Buffer.alloc(15360, 7); // one 320 ms tutor chunk
+  const legacyMic = JSON.stringify({ type: 'audio', data: mic.toString('base64') }).length;
+  const legacyReply = encodeServerMessage({ type: 'audio', data: reply.toString('base64') }, false).length;
+  assert.ok(mic.length / legacyMic < 0.75, `mic ${mic.length}/${legacyMic}`);
+  assert.ok(encodeServerMessage({ type: 'audio', data: reply.toString('base64') }, true).length / legacyReply < 0.76);
 });
 
 test('buildSetupFrame shapes model, voice and VAD config', () => {
