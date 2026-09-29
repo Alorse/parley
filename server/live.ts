@@ -678,8 +678,12 @@ export class GeminiLiveSession extends EventEmitter {
     return true;
   }
 
+  // Typed text is never transcribed, so it is what the learner said this
+  // turn: without it the review saw an empty turn and answered "I didn't
+  // catch that" to everything typed.
   sendText(text: string): void {
     this._disarmSilenceNudge();
+    this.turn.userText = text;
     this._sendTurn(text);
   }
 

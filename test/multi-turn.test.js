@@ -193,6 +193,26 @@ test('setLearnerName updates the name carried by every later review-request, onc
   session.stop();
 });
 
+test('a typed turn is reviewed as what the learner typed', async () => {
+  const { session, ws, clientEvents } = await startSession();
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
+  await delay(PAST_TAIL_GUARD);
+
+  session.sendText('Yesterday I goed to the park');
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 1);
+  assert.equal(reviewRequests[0].user, 'Yesterday I goed to the park');
+  assert.ok(clientEvents.some((e) => e.type === 'input-text' && e.final && e.text === 'Yesterday I goed to the park'), 'shown as the learner line');
+
+  session.stop();
+});
+
 // --- scenario flows into the review request (issue #8) ---------------------
 
 test('a completed turn\'s review-request payload carries the session\'s scenario, so the review can judge a role-play goodbye in context', async () => {
