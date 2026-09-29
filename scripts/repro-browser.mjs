@@ -226,6 +226,9 @@ class Page {
   click(id) {
     return this.eval(`document.getElementById(${JSON.stringify(id)}).click()`);
   }
+  tab(name) {
+    return this.eval(`document.querySelector('[data-tab=${JSON.stringify(name)}]').click()`);
+  }
 }
 
 async function launchChrome() {
@@ -319,6 +322,13 @@ async function echoWindow({ outputLatencyMs = null } = {}) {
       ink.push((await page.summary()).waveformInk);
     }
     const s = await page.summary();
+    // Another screen shown mid-conversation: neither the orb nor the mic
+    // line is on screen, so nothing should be drawn.
+    await page.tab('words');
+    await sleep(500);
+    const raf0 = await page.eval('window.__parley.rafCalls');
+    await sleep(2000);
+    const rafOtherScreen = ((await page.eval('window.__parley.rafCalls')) - raf0) / 2;
     const upstream = gem.sessions[0];
     return {
       expected: 'mic re-opens only after Parley has finished playing (stillToPlay < 0, with margin for network + device output latency)',
@@ -329,6 +339,7 @@ async function echoWindow({ outputLatencyMs = null } = {}) {
       outputLatencyMs: s.outputLatencyMs,
       thinkingStatesSeen: s.states.split(',').filter((v) => v === 'thinking').length,
       waveformInkPerSecond: ink.map((v) => (v === null ? '-' : v)).join(','),
+      rafPerSecondOnOtherScreen: rafOtherScreen,
       states: s.states,
     };
   });
@@ -545,11 +556,10 @@ const SCENARIOS = {
           jsHeapMB: +(m1.JSHeapUsedSize / 1048576).toFixed(1),
         };
       };
-      const tab = (name) => page.eval(`document.querySelector('[data-tab="${name}"]').click()`);
       const talk = await measure(10);
-      await tab('words');
+      await page.tab('words');
       const otherScreen = await measure(5);
-      await tab('talk');
+      await page.tab('talk');
       await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
       const reducedMotion = await measure(5);
       return { expected: 'near-zero work when idle', ...talk, otherScreen, reducedMotion };
