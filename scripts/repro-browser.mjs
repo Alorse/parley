@@ -21,7 +21,7 @@
 //
 // Usage:
 //   node scripts/repro-browser.mjs [scenario ...] [--port N] [--json out.json]
-// Scenarios: double-tap, server-restart, end-restart, echo-window,
+// Scenarios: audio-wire, double-tap, server-restart, end-restart, echo-window,
 //            echo-bluetooth, screen-reader, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu,
 //            sw-offline   (default: all)
 //
@@ -44,7 +44,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
 };
-const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu', 'sw-offline'];
+const ALL = ['audio-wire', 'double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu', 'sw-offline'];
 const flagValues = new Set([flag('--port'), flag('--json')]);
 const requested = argv.filter((a) => !a.startsWith('--') && !flagValues.has(a));
 const scenarios = requested.length ? requested : ALL;
@@ -92,12 +92,16 @@ const INSTRUMENT = `(() => {
   window.WebSocket = class extends OrigWS {
     constructor(url, ...rest) {
       super(url, ...rest);
-      const rec = { url: String(url), opened: null, closed: null, framesSent: 0, firstFrameAt: null, lastFrameAt: null };
+      const rec = { url: String(url), opened: null, closed: null, framesSent: 0, firstFrameAt: null, lastFrameAt: null, bytesSent: 0, bytesReceived: 0 };
       P.sockets.push(rec);
       this.addEventListener('open', () => (rec.opened = performance.now()));
       this.addEventListener('close', () => (rec.closed = performance.now()));
+      // Payload bytes only (the WebSocket frame header adds 2-14 more).
+      const size = (d) => (typeof d === 'string' ? new TextEncoder().encode(d).length : d.byteLength ?? d.size ?? 0);
       this.addEventListener('message', (e) => {
+        rec.bytesReceived += size(e.data);
         try {
+          if (typeof e.data !== 'string') return;
           const m = JSON.parse(e.data);
           if (m.type === 'state') {
             P.states.push({ value: m.value, wall: performance.now() });
@@ -110,7 +114,9 @@ const INSTRUMENT = `(() => {
       const origSend = this.send.bind(this);
       this.send = (data) => {
         try {
-          if (typeof data === 'string' && data.startsWith('{"type":"audio"')) {
+          rec.bytesSent += size(data);
+          // Mic audio: a binary frame, or the JSON/base64 frame of older builds.
+          if (typeof data !== 'string' || data.startsWith('{"type":"audio"')) {
             rec.framesSent++;
             if ((stillToPlayMs() ?? -1) > 0) P.framesWhilePlaying++;
             const now = performance.now();
@@ -160,6 +166,23 @@ const INSTRUMENT = `(() => {
       list.sort((a, b) => a.at - b.at);
       for (let i = 2; i < list.length; i++) if (list[i].tag === list[i - 2].tag && list[i].tag !== list[i - 1].tag) switches++;
     }
+    // Playback glitches, within one AudioContext: a buffer starting before
+    // the previous one ended (two chunks heard at once), or a short hole
+    // between them mid-reply (an underrun; pauses between replies are longer).
+    let overlaps = 0;
+    let underruns = 0;
+    let worstUnderrunMs = 0;
+    for (const list of Object.values(byCtx)) {
+      for (let i = 1; i < list.length; i++) {
+        const gap = list[i].at - list[i - 1].end;
+        if (gap < -0.001) overlaps++;
+        else if (gap > 0.001 && gap < 0.4) {
+          underruns++;
+          worstUnderrunMs = Math.max(worstUnderrunMs, Math.round(gap * 1000));
+        }
+      }
+    }
+    const live = P.sockets.filter((s) => s.url.endsWith('/live'));
     return {
       liveMicTracks: liveTracks,
       getUserMediaCalls: P.streams.length,
@@ -168,6 +191,12 @@ const INSTRUMENT = `(() => {
       framesSent: P.sockets.map((s) => s.framesSent),
       upstreamSessionsHeard: tags.length,
       interleavedSwitches: switches,
+      playbackOverlaps: overlaps,
+      playbackUnderruns: underruns,
+      worstUnderrunMs,
+      buffersPlayed: P.sources.length,
+      bytesSent: live.reduce((x, s) => x + s.bytesSent, 0),
+      bytesReceived: live.reduce((x, s) => x + s.bytesReceived, 0),
       listeningStillToPlayMs: P.listening.map((l) => l.stillToPlayMs),
       listeningShownStillToPlayMs: P.listeningShown,
       micFramesSentWhilePlaying: P.framesWhilePlaying,
@@ -336,6 +365,8 @@ async function echoWindow({ outputLatencyMs = null } = {}) {
       listeningStillToPlayMs: s.listeningStillToPlayMs,
       listeningShownStillToPlayMs: s.listeningShownStillToPlayMs,
       micFramesSentWhilePlaying: s.micFramesSentWhilePlaying,
+      playbackOverlaps: s.playbackOverlaps,
+      playbackUnderruns: s.playbackUnderruns,
       outputLatencyMs: s.outputLatencyMs,
       thinkingStatesSeen: s.states.split(',').filter((v) => v === 'thinking').length,
       waveformInkPerSecond: ink.map((v) => (v === null ? '-' : v)).join(','),
@@ -349,6 +380,32 @@ async function echoWindow({ outputLatencyMs = null } = {}) {
 const ONE_PIPELINE_FPS = 31.25;
 
 const SCENARIOS = {
+  // What the conversation costs on the wire (#24): payload bytes per second
+  // each way on the /live socket, with replies sent in a burst like the real
+  // API, and every scheduled buffer checked for overlaps and underruns.
+  async 'audio-wire'() {
+    return withRig({ replySeconds: 3, firstAudioDelayMs: 500, burst: true }, async ({ chrome, srv, gem }) => {
+      const page = await chrome.newPage(srv.url);
+      await page.click('mic-btn');
+      await sleep(3000);
+      const a = await page.summary();
+      await sleep(20000);
+      const b = await page.summary();
+      const secs = (b.now - a.now) / 1000;
+      return {
+        expected: 'mic frames only while listening (double-tap checks the ~31/s rate), 0 playback overlaps, 0 underruns',
+        turns: gem.sessions[0]?.replies,
+        micFramesPerSecond: framesPerSecond(a, b, secs),
+        upKBps: +((b.bytesSent - a.bytesSent) / 1024 / secs).toFixed(1),
+        downKBps: +((b.bytesReceived - a.bytesReceived) / 1024 / secs).toFixed(1),
+        playbackOverlaps: b.playbackOverlaps,
+        playbackUnderruns: b.playbackUnderruns,
+        worstUnderrunMs: b.worstUnderrunMs,
+        buffersPlayed: b.buffersPlayed,
+      };
+    });
+  },
+
   // A quick second tap while the first is still connecting / opening the mic.
   async 'double-tap'() {
     return withRig({ replySeconds: 2, firstAudioDelayMs: 300 }, async ({ chrome, srv }) => {
