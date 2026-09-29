@@ -63,6 +63,8 @@ test('buildSetupFrame shapes model, voice and VAD config', () => {
   assert.deepEqual(frame.setup.outputAudioTranscription, {});
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.disabled, false);
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.silenceDurationMs, 700);
+  // #27: a faint sound is not taken for the start of speech.
+  assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.startOfSpeechSensitivity, 'START_SENSITIVITY_LOW');
 });
 
 // --- #27: noise heard as a learner turn --------------------------------------

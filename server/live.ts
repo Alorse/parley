@@ -104,7 +104,10 @@ export function buildSetupFrame({
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+          // Slower to take a faint sound (Parley's own echo) for the start of
+          // speech. speech-probe: the quiet-voice fixture is still heard word
+          // for word on 3.8 and 3.1, and the echo-only one yields less (#27).
+          startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
           endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
           silenceDurationMs: 700,
           prefixPaddingMs: 300,
