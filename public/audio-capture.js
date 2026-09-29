@@ -6,13 +6,6 @@
 // stop() that lands while the mic is still opening releases whatever that
 // start() acquires, so "off" is really off.
 
-function int16ToBase64(int16) {
-  const bytes = new Uint8Array(int16.buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
 function releaseMic(stream, ctx) {
   if (stream) {
     for (const track of stream.getTracks()) track.stop();
@@ -83,9 +76,10 @@ export class AudioCapture {
 
     const workletNode = new AudioWorkletNode(ctx, 'pcm-worklet');
     source.connect(workletNode);
+    // Each chunk is the worklet's PCM16 ArrayBuffer, sent to the server as
+    // it is (#24).
     workletNode.port.onmessage = (event) => {
-      const int16 = new Int16Array(event.data);
-      if (this.onChunk) this.onChunk(int16ToBase64(int16));
+      if (this.onChunk) this.onChunk(event.data);
     };
 
     this.stream = stream;

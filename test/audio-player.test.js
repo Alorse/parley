@@ -38,3 +38,32 @@ test('after a flush only the latency and the tail are left', async () => {
   await player.flush();
   assert.equal(Math.round(player.msUntilHeard(250)), 500);
 });
+
+// #24: the tutor's audio arrives as binary frames of PCM16 at 24 kHz.
+test('enqueuePcm16 plays a binary frame back to back after the queued audio', async () => {
+  const started = [];
+  const ctx = {
+    state: 'running',
+    currentTime: 5,
+    sampleRate: 24000,
+    createBuffer: (channels, length, rate) => {
+      const data = new Float32Array(length);
+      return { duration: length / rate, copyToChannel: (src) => data.set(src), data };
+    },
+    createBufferSource: () => ({
+      connect() {},
+      start(at) {
+        started.push({ at, samples: [...this.buffer.data] });
+      },
+    }),
+  };
+  const player = new AudioPlayer();
+  player.ctx = /** @type {any} */ (ctx);
+  player.nextStartTime = 6;
+  await player.enqueuePcm16(new Int16Array([16384, -16384, 0]).buffer);
+  await player.enqueuePcm16(new Int16Array([8192, 8192]).buffer);
+  assert.deepEqual(started, [
+    { at: 6, samples: [0.5, -0.5, 0] },
+    { at: 6 + 3 / 24000, samples: [0.25, 0.25] },
+  ]);
+});

@@ -153,6 +153,19 @@ test('#18 a failed open releases what it had acquired', async () => {
   }
 });
 
+test('#24 each worklet chunk is handed on as its PCM16 ArrayBuffer, not encoded', async () => {
+  const cap = new AudioCapture();
+  const chunks = [];
+  const starting = cap.start((chunk) => chunks.push(chunk));
+  grantMic();
+  assert.equal(await starting, true);
+  const pcm = new Int16Array([1000, -1000, 32767]).buffer;
+  cap.workletNode.port.onmessage({ data: pcm });
+  assert.deepEqual(chunks, [pcm]);
+  assert.equal(chunks[0], pcm, 'the same buffer, no copy');
+  cap.stop();
+});
+
 function startGranted(cap) {
   const p = cap.start(() => {});
   grantMic();

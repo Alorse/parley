@@ -121,13 +121,13 @@ async function streamAudio(ws, pcm) {
   const chunkBytes = 640; // 320 samples * 2 bytes = 20ms @ 16kHz mono PCM16
   for (let offset = 0; offset < pcm.length; offset += chunkBytes) {
     const chunk = pcm.subarray(offset, Math.min(offset + chunkBytes, pcm.length));
-    ws.send(JSON.stringify({ type: 'audio', data: chunk.toString('base64') }));
+    ws.send(chunk); // binary PCM, like the app (#24)
     await delay(20);
   }
   // Trailing silence so the upstream VAD detects end-of-speech.
   const silence = Buffer.alloc(chunkBytes);
   for (let i = 0; i < 45; i++) {
-    ws.send(JSON.stringify({ type: 'audio', data: silence.toString('base64') }));
+    ws.send(silence);
     await delay(20);
   }
 }
@@ -149,11 +149,11 @@ async function runLiveTest(pcm, port) {
     });
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'start', scenario: 'Just talk', level: 'B1', halfDuplex: true }));
+      ws.send(JSON.stringify({ type: 'start', scenario: 'Just talk', level: 'B1', halfDuplex: true, binary: true }));
     });
 
-    ws.on('message', (raw) => {
-      const msg = JSON.parse(raw.toString());
+    ws.on('message', (raw, isBinary) => {
+      const msg = isBinary ? { type: 'audio' } : JSON.parse(raw.toString());
       events.push(msg.type);
 
       if (msg.type === 'error') {
