@@ -253,7 +253,9 @@ test('#13 an upstream that never completes setup fails the session with an error
   ws.close();
   assert.ok(gotError, 'client heard nothing at all');
   assert.ok(ended, 'the failed session is closed, not left open');
-  assert.equal(newSessions(base).filter((s) => s.closedAt === null).length, 0, 'no upstream left waiting');
+  // The server closes the upstream as it fails the session, but that close
+  // reaches the fake upstream a moment after the client hears the error.
+  assert.ok(await waitFor(() => newSessions(base).every((s) => s.closedAt !== null), 1000), 'no upstream left waiting');
 });
 
 test('#13 the mic re-opens even if a turn never reports turnComplete', async () => {
