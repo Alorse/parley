@@ -32,6 +32,7 @@ export function resolveWebSocketImpl(): any {
 const UPSTREAM_BASE =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
+const INPUT_LANGUAGE = 'en-US';
 const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
@@ -84,7 +85,11 @@ export function buildSetupFrame({
         responseModalities: ['AUDIO'],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
       },
-      inputAudioTranscription: {},
+      // The learner speaks English: without the hint the transcriber guesses
+      // the language every turn and writes short or unclear English in other
+      // scripts (#28). Accepted by gemini-3.8-live and
+      // gemini-3.1-flash-live-preview (scripts/live-probe.mjs).
+      inputAudioTranscription: { languageCodes: [INPUT_LANGUAGE] },
       outputAudioTranscription: {},
       realtimeInputConfig: {
         automaticActivityDetection: {

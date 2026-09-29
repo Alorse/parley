@@ -129,7 +129,7 @@ export interface GeminiSetupFrame {
       responseModalities: string[];
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: string } } };
     };
-    inputAudioTranscription: Record<string, never>;
+    inputAudioTranscription: { languageCodes: string[] };
     outputAudioTranscription: Record<string, never>;
     realtimeInputConfig: {
       automaticActivityDetection: {

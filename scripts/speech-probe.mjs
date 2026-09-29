@@ -21,10 +21,9 @@
 //                own voice (the fixture uses the same voice as the tutor)
 //
 // Usage:
-//   GOOGLE_API_KEY=... node --import tsx scripts/speech-probe.mjs [variant ...] [--hint] [--prompt-file F]
-//   --hint         adds an English language hint to the setup (input
-//                  transcription languageCodes + speechConfig.languageCode)
-//                  to test whether it keeps the transcript in English
+//   GOOGLE_API_KEY=... node --import tsx scripts/speech-probe.mjs [variant ...] [--no-hint] [--prompt-file F]
+//   --no-hint      drops the English input-transcription hint from Parley's
+//                  setup (as before #28), to compare what gets transcribed
 //   --legacy       sends the persona as the first user turn, as Parley did
 //                  before #23 (default: Parley's setup, persona as
 //                  systemInstruction plus the kickoff app note)
@@ -48,7 +47,7 @@ if (!KEY) {
 }
 
 const argv = process.argv.slice(2);
-const HINT = argv.includes('--hint');
+const HINT = !argv.includes('--no-hint');
 const LEGACY = argv.includes('--legacy');
 const TRACE = argv.includes('--trace');
 const pfIdx = argv.indexOf('--prompt-file');
@@ -161,10 +160,7 @@ async function buildVariant(name) {
 function setupFrame(prompt) {
   const frame = buildSetupFrame({ model: MODEL, voice: 'Kore', persona: LEGACY ? '' : prompt });
   const s = /** @type {any} */ (frame.setup);
-  if (HINT) {
-    s.inputAudioTranscription = { languageCodes: ['en-US'] };
-    s.generationConfig.speechConfig.languageCode = 'en-US';
-  }
+  if (!HINT) s.inputAudioTranscription = {};
   return frame;
 }
 

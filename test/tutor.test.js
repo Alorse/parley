@@ -154,3 +154,9 @@ test('buildSystemPrompt tells the tutor that app notes are not the learner speak
   assert.ok(prompt.includes(`"${APP_NOTE_PREFIX}" comes from the Parley app, not from the learner`));
   assert.ok(KICKOFF_NOTE.startsWith(APP_NOTE_PREFIX));
 });
+
+test('buildSystemPrompt helps with Spanish without turning it into a correction and retry (#28)', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.match(prompt, /Speaking Spanish is not a mistake to correct/);
+  assert.match(prompt, /do not ask them to repeat the English phrase/i);
+});

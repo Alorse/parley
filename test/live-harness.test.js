@@ -458,7 +458,7 @@ test('#23 the Live setup carries the persona as a system instruction', () => {
   assert.deepEqual(setup.systemInstruction, { parts: [{ text: persona }] });
 });
 
-test('#14 the Live setup asks for English input transcription', { todo: 'English language hint (accepted by gemini-3.8-live, see scripts/live-probe.mjs)' }, () => {
+test('#28 the Live setup asks for English input transcription', () => {
   const setup = /** @type {any} */ (buildSetupFrame({ model: 'm', voice: 'Kore' })).setup;
   assert.deepEqual(setup.inputAudioTranscription?.languageCodes, ['en-US']);
 });

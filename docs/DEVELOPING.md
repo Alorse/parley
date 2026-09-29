@@ -159,7 +159,7 @@ node --import tsx scripts/live-probe.mjs    # Live turn timing + accepted setup 
             # audio with the persona as a user turn vs as systemInstruction)
 node --import tsx scripts/speech-probe.mjs # what the tutor hears and replies for
             # clean / doubled / quiet / accented / echo-only learner audio
-            # (--hint, --legacy, --prompt-file to try a fix without editing code)
+            # (--no-hint, --legacy, --prompt-file to try a fix without editing code)
 node scripts/perf-api.mjs [url]            # /live time-to-first-audio, review and
             # translate latency, shell weight (defaults to a scratch :8399)
 ```
