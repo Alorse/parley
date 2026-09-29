@@ -161,8 +161,9 @@ node scripts/repro-browser.mjs [scenario ...]   # headless Chrome + fake mic
             # + real server + fake upstream; instruments playback buffers,
             # sockets, mic streams. Scenarios: double-tap, server-restart,
             # end-restart, echo-window, echo-bluetooth, screen-reader,
-            # upstream-drop-twice, two-tabs, idle-cpu
+            # upstream-drop-twice, two-tabs, idle-cpu, sw-offline
 node scripts/perf-server.mjs               # server CPU/RSS per live session (offline)
+node scripts/perf-server.mjs --shell       # app shell bytes on the wire (offline)
 
 # These three spend real quota — keep runs small:
 node --import tsx scripts/live-probe.mjs    # Live turn timing + accepted setup fields
@@ -202,7 +203,11 @@ mode, not a theoretical one. The defences, in order:
    `activate` handler deletes every other cache — that is what evicts the
    previous release from devices that already installed it.
 3. **Serve an `ETag`** (the server does) so an intermediary can revalidate
-   instead of holding a copy until its TTL runs out.
+   instead of holding a copy until its TTL runs out. Text assets of 1 KB or more
+   are sent brotli- or gzip-compressed (`server/compress.ts`) with
+   `Vary: Accept-Encoding`, and each encoding has its own ETag
+   (`"<hash>-br"`, `"<hash>-gzip"`, `"<hash>"`), so a cache never answers one
+   encoding with another. Fonts and PNGs are sent as they are.
 4. **Verify after restarting the app** that origin and edge agree:
 
 ```bash
@@ -248,13 +253,13 @@ this checkout's local git config.
 
 ```
 server/    config.ts, tutor.ts, live.ts, protocol.ts, review.ts, translate.ts,
-           gemini-client.ts, store.ts, index.ts (TypeScript, run via tsx)
+           gemini-client.ts, store.ts, compress.ts, index.ts (TypeScript, run via tsx)
 public/    index.html, styles.css, app.js, live-client.js, audio-capture.js,
            pcm-worklet.js, audio-player.js, orb.js, icons.js, data.js,
            manifest.webmanifest, sw.js, icons/, fonts/
 scripts/   make_icons.py, e2e-live.mjs, browser-check.mjs, make-fake-mic.mjs,
-           repro-browser.mjs, perf-server.mjs, perf-api.mjs, live-probe.mjs,
-           speech-probe.mjs
+           repro-browser.mjs, perf-server.mjs, perf-api.mjs, shell-weight.mjs,
+           live-probe.mjs, speech-probe.mjs
 test/      *.test.js, harness/ (fake Gemini upstream + server helpers),
            fixtures/speech.pcm, fixtures/speech-accented.pcm
            (fixtures/fake-mic.wav is generated, not committed — see

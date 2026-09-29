@@ -23,6 +23,19 @@ const STATE_PARAMS = {
 // has a subtly unique silhouette without losing the underlying character.
 const BASE_LOBES = [1.0, 0.7, 1.16, 0.82, 1.05, 0.62, 0.93];
 
+// Frame pacing (#22). At rest the form only breathes slowly, and with
+// reduced motion it moves at a fifth of the speed and ignores the level, so
+// neither needs 60 redraws a second to look the same. A frame is skipped by
+// waiting, not by drawing nothing, so the phone's main thread can sleep.
+const IDLE_FRAME_MS = 50;
+const REDUCED_MOTION_FRAME_MS = 100;
+// A frame's time step is capped so a stall doesn't jump the shape, but
+// above the slowest pace so paced frames keep real time.
+const MAX_FRAME_SECONDS = (REDUCED_MOTION_FRAME_MS * 1.5) / 1000;
+
+// Live: MediaQueryList.matches follows the setting without a reload.
+const reducedMotionQuery = () => window.matchMedia('(prefers-reduced-motion: reduce)');
+
 function mix(c1, c2, t) {
   const a = parseInt(c1.slice(1), 16);
   const b = parseInt(c2.slice(1), 16);
@@ -61,7 +74,11 @@ export class Orb {
     this.running = false;
     this.raf = null;
     this.lastFrame = 0;
-    this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.timer = null;
+    this.visible = true;
+    /** @type {() => number} */
+    this.levelSource = () => 0;
+    this.motion = reducedMotionQuery();
 
     // Per-load asymmetry: the fixed lobe shape plus a small unique jitter.
     this.lobes = BASE_LOBES.map((v) => v + (Math.random() - 0.5) * 0.1);
@@ -76,6 +93,10 @@ export class Orb {
     });
   }
 
+  get reducedMotion() {
+    return this.motion.matches;
+  }
+
   _resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = this.canvas.getBoundingClientRect();
@@ -88,8 +109,16 @@ export class Orb {
     if (STATE_PARAMS[state]) this.state = state;
   }
 
-  setLevel(level) {
-    this.rawLevel = Math.max(0, Math.min(1, level || 0));
+  /** Read once per frame, so the level needs no loop of its own. */
+  setLevelSource(source) {
+    this.levelSource = source;
+  }
+
+  /** Whether the orb's screen is shown; a hidden orb is not drawn at all. */
+  setVisible(visible) {
+    this.visible = visible;
+    if (visible) this.resume();
+    else this.pause();
   }
 
   start() {
@@ -98,10 +127,12 @@ export class Orb {
     this.lastFrame = performance.now();
     const loop = (t) => {
       if (!this.running) return;
-      const dt = Math.min(0.05, (t - this.lastFrame) / 1000);
+      const dt = Math.min(MAX_FRAME_SECONDS, (t - this.lastFrame) / 1000);
       this.lastFrame = t;
       this._tick(dt);
-      this.raf = requestAnimationFrame(loop);
+      const wait = this._frameMs();
+      if (wait) this.timer = setTimeout(() => (this.raf = requestAnimationFrame(loop)), wait);
+      else this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
   }
@@ -109,14 +140,24 @@ export class Orb {
   pause() {
     this.running = false;
     if (this.raf) cancelAnimationFrame(this.raf);
+    clearTimeout(this.timer);
   }
 
   resume() {
-    if (!document.hidden) this.start();
+    if (this.visible && !document.hidden) this.start();
+  }
+
+  // Full rate whenever the form reacts to sound or state; paced when it
+  // only breathes.
+  _frameMs() {
+    if (this.reducedMotion) return REDUCED_MOTION_FRAME_MS;
+    if (this.state === 'idle' && this.rawLevel === 0 && this.level < 0.001) return IDLE_FRAME_MS;
+    return 0;
   }
 
   _tick(dt) {
     this.time += dt;
+    this.rawLevel = Math.max(0, Math.min(1, this.levelSource() || 0));
     const rate = this.rawLevel > this.level ? 0.5 : 0.08;
     this.level += (this.rawLevel - this.level) * rate;
     this._render();
@@ -226,8 +267,11 @@ const HISTORY_LEN = 48;
 const CARRIER_CYCLES = 3;
 
 export class MicWaveform {
-  constructor(canvas) {
+  /** @param {() => Uint8Array | null} getData the mic's time-domain samples */
+  constructor(canvas, getData) {
     this.canvas = canvas;
+    this.getData = getData;
+    this.motion = reducedMotionQuery();
     this.ctx = canvas.getContext('2d');
     this.running = false;
     this.raf = null;
@@ -267,12 +311,12 @@ export class MicWaveform {
     }
   }
 
-  start(getData) {
+  start() {
     if (this.running) return;
     this.running = true;
     const loop = () => {
       if (!this.running) return;
-      this._draw(getData());
+      this._draw(this.getData());
       this.raf = requestAnimationFrame(loop);
     };
     loop();
@@ -295,7 +339,7 @@ export class MicWaveform {
     const centerY = h / 2;
     ctx.clearRect(0, 0, w, h);
 
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const reducedMotion = this.motion.matches;
 
     let rawLevel = 0;
     if (data && data.length) {

@@ -22,7 +22,8 @@
 // Usage:
 //   node scripts/repro-browser.mjs [scenario ...] [--port N] [--json out.json]
 // Scenarios: double-tap, server-restart, end-restart, echo-window,
-//            echo-bluetooth, screen-reader, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
+//            echo-bluetooth, screen-reader, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu,
+//            sw-offline   (default: all)
 //
 // Needs Chrome/Chromium (CHROME_PATH or the usual locations). The scratch
 // server is started on a free port (or --port) and stopped by PID only.
@@ -43,7 +44,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
 };
-const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
+const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu', 'sw-offline'];
 const flagValues = new Set([flag('--port'), flag('--json')]);
 const requested = argv.filter((a) => !a.startsWith('--') && !flagValues.has(a));
 const scenarios = requested.length ? requested : ALL;
@@ -172,6 +173,16 @@ const INSTRUMENT = `(() => {
       micFramesSentWhilePlaying: P.framesWhilePlaying,
       outputLatencyMs: P.listening.map((l) => l.outputLatencyMs),
       states: P.states.map((s) => s.value).join(','),
+      // Painted pixels on the mic line (null while it is hidden): proves it
+      // is drawn while listening and only then (#22).
+      waveformInk: (() => {
+        const c = document.getElementById('waveform-canvas');
+        if (!c || c.classList.contains('hidden')) return null;
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let ink = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i]) ink++;
+        return ink;
+      })(),
       status: document.getElementById('status-line')?.textContent,
       micStatus: document.getElementById('mic-status')?.textContent,
       error: document.getElementById('error-card')?.classList.contains('hidden') ? null : document.getElementById('error-message')?.textContent,
@@ -214,6 +225,9 @@ class Page {
   }
   click(id) {
     return this.eval(`document.getElementById(${JSON.stringify(id)}).click()`);
+  }
+  tab(name) {
+    return this.eval(`document.querySelector('[data-tab=${JSON.stringify(name)}]').click()`);
   }
 }
 
@@ -301,8 +315,20 @@ async function echoWindow({ outputLatencyMs = null } = {}) {
       await page.eval(`Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => ${outputLatencyMs / 1000} }), true`);
     }
     await page.click('mic-btn');
-    await sleep(25000);
+    // Once a second: is the mic line shown, and how much of it is drawn.
+    const ink = [];
+    for (let i = 0; i < 25; i++) {
+      await sleep(1000);
+      ink.push((await page.summary()).waveformInk);
+    }
     const s = await page.summary();
+    // Another screen shown mid-conversation: neither the orb nor the mic
+    // line is on screen, so nothing should be drawn.
+    await page.tab('words');
+    await sleep(500);
+    const raf0 = await page.eval('window.__parley.rafCalls');
+    await sleep(2000);
+    const rafOtherScreen = ((await page.eval('window.__parley.rafCalls')) - raf0) / 2;
     const upstream = gem.sessions[0];
     return {
       expected: 'mic re-opens only after Parley has finished playing (stillToPlay < 0, with margin for network + device output latency)',
@@ -312,6 +338,8 @@ async function echoWindow({ outputLatencyMs = null } = {}) {
       micFramesSentWhilePlaying: s.micFramesSentWhilePlaying,
       outputLatencyMs: s.outputLatencyMs,
       thinkingStatesSeen: s.states.split(',').filter((v) => v === 'thinking').length,
+      waveformInkPerSecond: ink.map((v) => (v === null ? '-' : v)).join(','),
+      rafPerSecondOnOtherScreen: rafOtherScreen,
       states: s.states,
     };
   });
@@ -508,24 +536,57 @@ const SCENARIOS = {
     });
   },
 
-  // Main-thread cost while the app sits idle on the Talk screen (no session).
+  // Main-thread cost while the app sits idle (no session): on the Talk
+  // screen, with reduced motion, and on another screen (orb not shown).
   async 'idle-cpu'() {
     return withRig({}, async ({ chrome, srv }) => {
       const page = await chrome.newPage(srv.url);
       await page.send('Performance.enable');
-      const m = async () => Object.fromEntries((await page.send('Performance.getMetrics')).metrics.map((x) => [x.name, x.value]));
-      const r0 = await page.eval('window.__parley.rafCalls');
-      const m0 = await m();
-      await sleep(10000);
-      const m1 = await m();
-      const r1 = await page.eval('window.__parley.rafCalls');
-      return {
-        expected: 'near-zero work when idle',
-        rafCallbacksPerSecond: +((r1 - r0) / 10).toFixed(1),
-        scriptMsPerSecond: +(((m1.ScriptDuration - m0.ScriptDuration) * 1000) / 10).toFixed(1),
-        taskMsPerSecond: +(((m1.TaskDuration - m0.TaskDuration) * 1000) / 10).toFixed(1),
-        jsHeapMB: +(m1.JSHeapUsedSize / 1048576).toFixed(1),
+      const metrics = async () => Object.fromEntries((await page.send('Performance.getMetrics')).metrics.map((x) => [x.name, x.value]));
+      const measure = async (seconds) => {
+        const r0 = await page.eval('window.__parley.rafCalls');
+        const m0 = await metrics();
+        await sleep(seconds * 1000);
+        const m1 = await metrics();
+        const r1 = await page.eval('window.__parley.rafCalls');
+        return {
+          rafCallbacksPerSecond: +((r1 - r0) / seconds).toFixed(1),
+          scriptMsPerSecond: +(((m1.ScriptDuration - m0.ScriptDuration) * 1000) / seconds).toFixed(1),
+          taskMsPerSecond: +(((m1.TaskDuration - m0.TaskDuration) * 1000) / seconds).toFixed(1),
+          jsHeapMB: +(m1.JSHeapUsedSize / 1048576).toFixed(1),
+        };
       };
+      const talk = await measure(10);
+      await page.tab('words');
+      const otherScreen = await measure(5);
+      await page.tab('talk');
+      await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+      const reducedMotion = await measure(5);
+      return { expected: 'near-zero work when idle', ...talk, otherScreen, reducedMotion };
+    });
+  },
+
+  // The service worker with compressed responses (#25): what the page was
+  // sent on the wire, that the cached shell decodes to the real files, and
+  // that the app still opens offline from that cache.
+  async 'sw-offline'() {
+    return withRig({}, async ({ chrome, srv }) => {
+      const page = await chrome.newPage(srv.url);
+      await page.eval(`navigator.serviceWorker.ready.then(() => new Promise((r) => setTimeout(r, 1500)))`);
+      const online = await page.eval(`(async () => {
+        const wire = Object.fromEntries(performance.getEntriesByType('resource').filter((e) => /\\.(js|css)/.test(e.name))
+          .map((e) => [new URL(e.name).pathname, { encoded: e.encodedBodySize, decoded: e.decodedBodySize }]));
+        const cache = await caches.open((await caches.keys())[0]);
+        const cached = await (await cache.match('/app.js')).text();
+        const fresh = await (await fetch('/app.js', { cache: 'no-store' })).text();
+        return { cacheNames: await caches.keys(), cachedEntries: (await cache.keys()).length, cachedAppJsMatches: cached === fresh, wire };
+      })()`);
+      await page.send('Network.enable');
+      await page.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      await page.send('Page.reload', { ignoreCache: false });
+      await sleep(2000);
+      const offline = await page.eval(`({ title: document.title, micButton: !!document.getElementById('mic-btn'), controlled: !!navigator.serviceWorker.controller })`);
+      return { expected: 'compressed on the wire, cache decodes to the real file, opens offline', online, offline, errors: page.console };
     });
   },
 };

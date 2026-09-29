@@ -12,7 +12,7 @@
 //   content-hashed filenames, so a cache-first shell can pair a fresh
 //   index.html with a stale app.js/styles.css after an update. Fonts and
 //   icons are immutable enough to serve cache-first.
-const CACHE_NAME = 'parley-v11';
+const CACHE_NAME = 'parley-v12';
 
 const APP_SHELL = [
   '/',
