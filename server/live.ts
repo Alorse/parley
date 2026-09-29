@@ -172,6 +172,27 @@ export function containsStackedTurn(assistantText: string): boolean {
   return CORRECTION_INVITATION_PATTERN.test(assistantText) && assistantText.includes('?');
 }
 
+// Hesitation sounds and backchannels: on their own they are not a reply.
+const FILLER_WORD = /^(?:m+h*m*|h+m+|u+h+|u+m+|a+h+|o+h+|e+h+|e+r+m*|uhhuh|mhmm*)$/;
+// Whole "turns" seen in the production journal that were only a sound Parley
+// had misheard as a word (#27).
+const NOISE_WORDS = new Set(['un', 'ja', 'rip', 'oii']);
+
+// True when a learner turn's transcript is not speech worth answering or
+// scoring: empty, a single character, only hesitation sounds ("Mhm.",
+// "Um, uh"), or one of the noise phantoms seen live. A short real answer
+// ("Yes.", "No", "Two") is speech.
+export function isNoiseTranscript(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean);
+  if (words.join('').length <= 1) return true;
+  if (words.length === 1 && NOISE_WORDS.has(words[0])) return true;
+  return words.every((w) => FILLER_WORD.test(w));
+}
+
 export interface HalfDuplexGateOptions {
   tailGuardMs?: number;
   enabled?: boolean;
@@ -293,6 +314,8 @@ export class SilenceNudge {
 
 interface Turn {
   userText: string;
+  // Typed, not spoken: never treated as noise.
+  typed: boolean;
   assistantText: string;
   startedAt: number;
   silent: boolean;
@@ -301,7 +324,7 @@ interface Turn {
 }
 
 function freshTurn(): Turn {
-  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false, playbackEndsAt: 0 };
+  return { userText: '', assistantText: '', typed: false, startedAt: Date.now(), silent: false, playbackEndsAt: 0 };
 }
 
 export interface GeminiLiveSessionOptions {
@@ -684,6 +707,7 @@ export class GeminiLiveSession extends EventEmitter {
   sendText(text: string): void {
     this._disarmSilenceNudge();
     this.turn.userText = text;
+    this.turn.typed = true;
     this._sendTurn(text);
   }
 
@@ -809,7 +833,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private _onTurnComplete(): void {
-    const { userText, assistantText, startedAt, silent, playbackEndsAt } = this.turn;
+    const { userText, assistantText, typed, startedAt, silent, playbackEndsAt } = this.turn;
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._watchdogTimer);
@@ -830,7 +854,12 @@ export class GeminiLiveSession extends EventEmitter {
       });
     }
 
-    if (!silent) {
+    // Only a noise, a murmur or Parley's own echo was heard (#27): not a
+    // learner turn, so no score and nothing counted.
+    const noise = !silent && !typed && isNoiseTranscript(userText);
+    if (noise) this.log('noise-turn', { chars: userText.trim().length });
+
+    if (!silent && !noise) {
       this.turnsCompleted += 1;
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
       const payload: ReviewRequestPayload = {

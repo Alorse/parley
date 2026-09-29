@@ -70,7 +70,9 @@ Events: `open`, `busy`, `start`, `upstream-ready` (model, setup time),
 `upstream-error`, `upstream-close` (close code, reason, how long it was up),
 `reconnecting`, `going-away`, `gave-up`, `start-failed`, `replaced` (a newer
 conversation on the same device took over), `idle` (closed after the idle
-limit), and `end` (duration, learner turns, reconnects, client close code).
+limit), `noise-turn` (a spoken turn heard only as a murmur, a single letter or
+nothing, so it was not scored; carries its length only), and `end` (duration,
+learner turns, reconnects, client close code).
 They carry lifecycle metadata only — never speech, transcripts, audio, the API key or resumption handles
 (`server/session-log.ts`).
 

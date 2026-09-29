@@ -49,6 +49,8 @@ function resetFake(overrides = {}) {
     neverCompleteSetup: false,
     omitTurnComplete: false,
     rejectConnections: false,
+    burst: false,
+    transcript: null,
     ...overrides,
   });
 }
@@ -565,6 +567,25 @@ test('#27 the tail of Parley’s own voice never reaches Gemini as a learner tur
   resetFake({ replySeconds: 0.64, burst: true });
   const { phantomTurns } = await echoingClient();
   assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
+});
+
+test('#27 a turn heard only as a murmur is not scored or counted, and a real one still is', async () => {
+  const turnsHeardAs = async (transcript) => {
+    resetFake({ transcript, replySeconds: 0.32 });
+    const { ws, events } = await connect();
+    ws.send(JSON.stringify({ type: 'start' }));
+    await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 3000);
+    const quiet = Buffer.alloc(1024).toString('base64');
+    let n = 0;
+    const iv = setInterval(() => ws.send(JSON.stringify({ type: 'audio', data: n++ < 10 ? LOUD_FRAME : quiet })), 32);
+    await waitFor(() => events.filter((e) => e.type === 'output-text' && e.final).length >= 2, 4000);
+    await delay(300);
+    clearInterval(iv);
+    ws.close();
+    return { turns: events.filter((e) => e.type === 'turn-complete').length, reviews: events.filter((e) => e.type === 'review').length };
+  };
+  assert.deepEqual(await turnsHeardAs('Mhm.'), { turns: 0, reviews: 0 });
+  assert.deepEqual(await turnsHeardAs('I like the beach.'), { turns: 1, reviews: 1 });
 });
 
 // --- #14: hearing and honesty ------------------------------------------------

@@ -91,6 +91,7 @@ test('a live session accepts a second and third user turn after the tutor finish
   assert.equal(session.sendAudio('turn-1-audio'), true, 'mic re-opens after the greeting finishes');
 
   // --- user turn 1 ------------------------------------------------------
+  ws.emitServerMessage(inputTranscriptionMessage('Learner turn 1'));
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
   assert.equal(session.sendAudio('gated-during-turn-1-reply'), false, 'gated again while turn 1 wraps up');
@@ -99,6 +100,7 @@ test('a live session accepts a second and third user turn after the tutor finish
   assert.equal(session.sendAudio('turn-2-audio'), true, 'mic re-opens after turn 1 finishes');
 
   // --- user turn 2 --------------------------------------------------------
+  ws.emitServerMessage(inputTranscriptionMessage('Learner turn 2'));
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
 
@@ -106,6 +108,7 @@ test('a live session accepts a second and third user turn after the tutor finish
   assert.equal(session.sendAudio('turn-3-audio'), true, 'mic re-opens after turn 2 finishes, ready for a third turn');
 
   // --- user turn 3 --------------------------------------------------------
+  ws.emitServerMessage(inputTranscriptionMessage('Learner turn 3'));
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
   await delay(PAST_TAIL_GUARD);
@@ -137,6 +140,27 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
   }
 
   assert.equal(acceptedTurns, 6, 'every one of 6 sequential turns found the mic open after its predecessor finished');
+
+  session.stop();
+});
+
+test('#27 a turn heard only as a murmur, a letter or nothing is not reviewed or counted', async () => {
+  const { session, ws, clientEvents } = await startSession();
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
+  for (const heard of ['Mhm.', 'b', null, 'I went to the beach']) {
+    await delay(PAST_TAIL_GUARD);
+    if (heard) ws.emitServerMessage(inputTranscriptionMessage(heard));
+    ws.emitServerMessage(audioChunkMessage());
+    ws.emitServerMessage(turnCompleteMessage());
+  }
+
+  assert.deepEqual(reviewRequests.map((r) => r.user), ['I went to the beach']);
+  assert.equal(clientEvents.filter((e) => e.type === 'turn-complete').length, 1);
+  assert.equal(session.turnsCompleted, 1);
 
   session.stop();
 });

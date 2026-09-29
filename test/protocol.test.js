@@ -7,6 +7,7 @@ import {
   textUpstreamFrame,
   buildSetupFrame,
   HalfDuplexGate,
+  isNoiseTranscript,
   SilenceNudge,
   containsStackedTurn,
   resolveWebSocketImpl,
@@ -62,6 +63,20 @@ test('buildSetupFrame shapes model, voice and VAD config', () => {
   assert.deepEqual(frame.setup.outputAudioTranscription, {});
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.disabled, false);
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.silenceDurationMs, 700);
+});
+
+// --- #27: noise heard as a learner turn --------------------------------------
+
+test('isNoiseTranscript: the phantom turns from the production journal are noise', () => {
+  for (const text of ['', '   ', 'Mhm.', 'un', 'b', 'Ja.', 'RIP', 'OII', 'Hmm…', 'Uh-huh.', 'Um, uh.', '.', 'I']) {
+    assert.equal(isNoiseTranscript(text), true, JSON.stringify(text));
+  }
+});
+
+test('isNoiseTranscript: short real answers are speech', () => {
+  for (const text of ['Yes.', 'No', 'OK!', 'Hi', 'Two.', 'Dog', 'Mhm, I think so.', 'Oh, I see', 'I went to the beach.']) {
+    assert.equal(isNoiseTranscript(text), false, JSON.stringify(text));
+  }
 });
 
 // --- half-duplex gating -----------------------------------------------------
