@@ -11,6 +11,7 @@ import {
   getProfile,
   setProfileName,
   getMemoryNote,
+  getClientId,
   addConversationMemory,
   buildConversationMemory,
   forgetProfile,
@@ -75,7 +76,10 @@ function applyTextSize(textSize) {
   document.documentElement.style.setProperty('--scale', String(found.scale));
 }
 
+// null for a start that was cancelled on purpose (another window took the
+// conversation over while this one was still connecting): nothing to report.
 function micErrorMessage(err) {
+  if (err && err.name === 'AbortError') return null;
   if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
     return "I couldn't hear you — check the microphone permission.";
   }
@@ -227,6 +231,11 @@ function showError(message) {
   el('error-card').classList.remove('hidden');
 }
 
+function showStartError(err) {
+  const message = micErrorMessage(err);
+  if (message) showError(message);
+}
+
 function hideError() {
   el('error-card').classList.add('hidden');
 }
@@ -376,6 +385,7 @@ async function ensureSession() {
   if (state.sessionStarted) return;
   if (connectPromise) return connectPromise;
   hideError();
+  claimConversation();
   state.conversationCorrections = [];
   state.hadTurn = false;
   connectPromise = liveClient
@@ -387,6 +397,7 @@ async function ensureSession() {
       feedbackDetail: state.settings.feedbackDetail,
       name: state.profile.name,
       memoryNote: getMemoryNote(state.profile),
+      clientId: getClientId(),
     })
     .then(() => {
       state.sessionStarted = true;
@@ -500,6 +511,27 @@ liveClient.addEventListener('close', () => {
   }
 });
 
+// --- one conversation per device (#19) -----------------------------------
+// Starting a conversation here ends the one in any other Parley window or
+// tab on this device (the installed app included), so two tutors never talk
+// over each other or hear each other through the mic. The server enforces
+// the same rule per device id; this makes the older window let go at once
+// and say why.
+
+const TAKEN_OVER_MESSAGE = 'Parley is open in another window, so this conversation was closed here.';
+const conversationChannel = 'BroadcastChannel' in window ? new BroadcastChannel('parley-conversation') : null;
+
+function claimConversation() {
+  conversationChannel?.postMessage({ type: 'claim' });
+}
+
+conversationChannel?.addEventListener('message', (event) => {
+  if (event.data?.type !== 'claim' || (!state.sessionStarted && !connectPromise)) return;
+  liveClient.stop();
+  if (state.sessionStarted) teardownSession();
+  showError(TAKEN_OVER_MESSAGE);
+});
+
 // --- mic / end / meaning / type / hint controls --------------------------
 
 function updateMicUI() {
@@ -535,7 +567,7 @@ el('mic-btn').addEventListener('click', async () => {
     }
     updateMicUI();
   } catch (err) {
-    showError(micErrorMessage(err));
+    showStartError(err);
   } finally {
     micToggleBusy = false;
   }
@@ -605,7 +637,7 @@ el('type-form').addEventListener('submit', async (e) => {
     await ensureSession();
     liveClient.sendText(text);
   } catch (err) {
-    showError(micErrorMessage(err));
+    showStartError(err);
   }
 });
 

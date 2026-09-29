@@ -35,6 +35,12 @@ const MIME_TYPES: Record<string, string> = {
 
 let activeSessions = 0;
 
+// One conversation per device (#19): for each clientId, the function that
+// ends the connection currently holding its conversation. Tabs and the
+// installed app share the id, so a newer start takes over from the older.
+const conversationsByClient = new Map<string, () => void>();
+const MAX_CLIENT_ID_LENGTH = 64;
+
 // No build step means no content-hashed filenames, so any cache in front of the
 // app (or a browser) that keys on the URL alone can serve a stale styles.css or
 // app.js next to a fresh index.html. HTML and code therefore always revalidate;
@@ -178,6 +184,7 @@ wss.on('connection', (ws) => {
   let released = false;
   let endReason = 'client-closed';
   let alive = true;
+  let clientId = '';
 
   // Frees this connection's MAX_SESSIONS slot exactly once, as soon as the
   // session is known to be over rather than when the close handshake ends.
@@ -194,6 +201,16 @@ wss.on('connection', (ws) => {
     endReason = reason;
     release();
     if (ws.readyState === ws.OPEN) ws.close(1011, reason);
+  };
+
+  // A newer conversation on the same device took over: say so, then end
+  // this one so its mic and speaker stop too.
+  const replaced = () => {
+    log('replaced');
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Parley is open in another window, so this conversation was closed here.', code: 'replaced' }));
+    }
+    endConnection('replaced');
   };
 
   const pingInterval = setInterval(() => {
@@ -228,6 +245,11 @@ wss.on('connection', (ws) => {
         return;
       }
       started = true;
+      if (typeof msg.clientId === 'string' && msg.clientId && msg.clientId.length <= MAX_CLIENT_ID_LENGTH) {
+        clientId = msg.clientId;
+        conversationsByClient.get(clientId)?.();
+        conversationsByClient.set(clientId, replaced);
+      }
       const profile = store.read<StoredProfile>('profile', {});
       const scenario = msg.scenario ?? profile.scenario ?? 'Just talk';
       const level = msg.level ?? profile.level ?? 'B1';
@@ -328,6 +350,7 @@ wss.on('connection', (ws) => {
     alive = false;
     clearInterval(pingInterval);
     release();
+    if (conversationsByClient.get(clientId) === replaced) conversationsByClient.delete(clientId);
     if (pending) pending.stop();
     log('end', {
       reason: endReason,

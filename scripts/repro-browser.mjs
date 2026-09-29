@@ -433,8 +433,8 @@ const SCENARIOS = {
       const [a, b] = await Promise.all([p1.summary(), p2.summary()]);
       return {
         expected: 'only one tab holds a live conversation at a time',
-        tab1: { liveSockets: a.liveSockets, status: a.status },
-        tab2: { liveSockets: b.liveSockets, status: b.status },
+        tab1: { liveSockets: a.liveSockets, liveMicTracks: a.liveMicTracks, status: a.status, error: a.error },
+        tab2: { liveSockets: b.liveSockets, liveMicTracks: b.liveMicTracks, status: b.status, error: b.error },
       };
     });
   },

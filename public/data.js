@@ -37,6 +37,21 @@ function saveJson(key, value) {
   }
 }
 
+// --- device id -------------------------------------------------------------
+// A random id shared by every tab and the installed app on this device (one
+// browser profile), sent with each conversation start so the server keeps
+// one conversation per device (#19). Not tied to the learner in any way.
+
+const DEVICE_KEY = 'parley.device.v1';
+
+export function getClientId() {
+  const stored = loadJson(DEVICE_KEY, { id: '' });
+  if (stored.id) return stored.id;
+  const id = crypto.randomUUID();
+  saveJson(DEVICE_KEY, { id });
+  return id;
+}
+
 // --- word store --------------------------------------------------------
 
 const WORDS_KEY = 'parley.words.v1';

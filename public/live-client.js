@@ -8,17 +8,25 @@ export class LiveClient extends EventTarget {
     this.ws = null;
   }
 
-  connect({ scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote }) {
+  connect({ scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote, clientId }) {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/live`);
       this.ws = ws;
 
       const onOpen = () => {
-        this.send({ type: 'start', scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote });
+        this.send({ type: 'start', scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote, clientId });
         resolve();
       };
-      const onError = () => reject(new Error('Could not connect to the tutor.'));
+      const onError = () => {
+        // stop() before the socket opened is a deliberate cancel, not a
+        // failure to report.
+        if (ws !== this.ws) {
+          reject(new DOMException('Connecting was cancelled.', 'AbortError'));
+          return;
+        }
+        reject(new Error('Could not connect to the tutor.'));
+      };
 
       ws.addEventListener('open', onOpen);
       ws.addEventListener('error', onError);

@@ -292,6 +292,68 @@ test('#13 a second start on the same socket does not open a second upstream sess
   assert.equal(events.find((e) => e.type === 'error')?.code, 'already-started');
 });
 
+// --- #19: one conversation per device ----------------------------------------
+
+test('#19 a newer conversation from the same device takes over, and the older one is told why', async () => {
+  resetFake();
+  const base = gem.sessions.length;
+  const older = await connect();
+  older.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19a' }));
+  await waitFor(() => older.events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const newer = await connect();
+  newer.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19a' }));
+  const olderEnded = await Promise.race([older.closed.then(() => true), delay(2000).then(() => false)]);
+  await waitFor(() => newer.events.some((e) => e.type === 'state' && e.value === 'listening'));
+  try {
+    assert.ok(olderEnded, 'the older conversation kept running');
+    assert.equal(older.events.find((e) => e.type === 'error')?.code, 'replaced');
+    assert.equal(newer.events.filter((e) => e.type === 'error').length, 0);
+    assert.equal(newer.ws.readyState, newer.ws.OPEN);
+    const [first, second] = newSessions(base);
+    assert.ok(await waitFor(() => first.closedAt !== null), "the older conversation's upstream was left open");
+    assert.equal(second.closedAt, null);
+  } finally {
+    newer.ws.close();
+  }
+});
+
+test('#19 a takeover also ends an older conversation that is still being set up', async () => {
+  resetFake({ setupDelayMs: 400 });
+  const base = gem.sessions.length;
+  const older = await connect();
+  older.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19b' }));
+  await delay(100);
+  const newer = await connect();
+  newer.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19b' }));
+  await waitFor(() => newer.events.some((e) => e.type === 'state' && e.value === 'listening'), 4000);
+  await delay(200);
+  try {
+    assert.equal(older.events.find((e) => e.type === 'error')?.code, 'replaced');
+    const open = newSessions(base).filter((s) => s.closedAt === null);
+    assert.equal(open.length, 1, `${open.length} upstream sessions open for one device`);
+  } finally {
+    newer.ws.close();
+  }
+});
+
+test('#19 conversations from different devices do not affect each other', async () => {
+  resetFake();
+  const a = await connect();
+  const b = await connect();
+  a.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19c' }));
+  b.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19d' }));
+  await waitFor(() => [a, b].every((c) => c.events.some((e) => e.type === 'state' && e.value === 'listening')));
+  try {
+    for (const c of [a, b]) {
+      assert.equal(c.events.filter((e) => e.type === 'error').length, 0);
+      assert.equal(c.ws.readyState, c.ws.OPEN);
+    }
+  } finally {
+    a.ws.close();
+    b.ws.close();
+  }
+});
+
 test('#17 the turn watchdog waits for a burst-sent reply to finish playing before stepping in', async () => {
   // gemini-3.8-live sends the audio in a burst and holds turnComplete until
   // playback would end: 3 s of audio here, twice the 1.5 s watchdog.

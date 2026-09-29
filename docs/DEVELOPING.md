@@ -88,6 +88,12 @@ the server sends an `error`, frees the `MAX_SESSIONS` slot and closes the
 socket; the client turns the mic off and says the conversation ended. A second
 `start` on one socket is rejected with `{code:"already-started"}`.
 
+One conversation per device: the app keeps a random device id in
+localStorage (shared by its tabs and the installed app) and sends it with
+`start`. A newer `start` with the same id ends the older connection with
+`{code:"replaced"}`, and a `BroadcastChannel` makes the older window let go
+at once.
+
 ## Node version
 
 The app runs on Node **20.11+** and later. Node ≥ 22 ships a global `WebSocket`;
