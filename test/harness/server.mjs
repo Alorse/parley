@@ -4,8 +4,7 @@
 // production process with a similar command line is never touched.
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
@@ -31,7 +30,11 @@ export function freePort() {
  */
 export async function startParley({ upstreamUrl, port, env = {} }) {
   const listenPort = port ?? (await freePort());
-  const dataDir = mkdtempSync(path.join(tmpdir(), 'parley-harness-'));
+  // Inside the repo's git-ignored tmp/ and passed as a RELATIVE path: the
+  // server joins DATA_DIR onto the project root, so an absolute path would
+  // be written somewhere else than where this helper cleans up.
+  mkdirSync(path.join(ROOT, 'tmp'), { recursive: true });
+  const dataDir = mkdtempSync(path.join(ROOT, 'tmp', 'parley-harness-'));
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', '--import', './test/harness/redirect-upstream.mjs', 'server/index.ts'],
@@ -42,7 +45,7 @@ export async function startParley({ upstreamUrl, port, env = {} }) {
         GOOGLE_API_KEY: 'harness-fake-key',
         PORT: String(listenPort),
         WARMUP: '0',
-        DATA_DIR: dataDir,
+        DATA_DIR: path.relative(ROOT, dataDir),
         PARLEY_FAKE_UPSTREAM: upstreamUrl,
         ...env,
       },
