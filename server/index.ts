@@ -10,6 +10,7 @@ import { translate, hint, type TranslateParams, type HintParams } from './transl
 import { JsonStore } from './store.js';
 import { warmUp } from './warmup.js';
 import { createSessionLogger, newSessionId } from './session-log.js';
+import { compressed, etagMatches, negotiateEncoding, worthCompressing } from './compress.js';
 import type { ClientMessage, LiveEventMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
@@ -64,22 +65,31 @@ async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse):
   try {
     const data = await readFile(fullPath);
     const ext = path.extname(fullPath);
-    const headers = {
+    const hash = createHash('sha1').update(data).digest('hex').slice(0, 32);
+    const compressible = worthCompressing(ext, data.length);
+    const encoding = compressible ? negotiateEncoding(req.headers['accept-encoding']) : null;
+    const etag = encoding ? `"${hash}-${encoding}"` : `"${hash}"`;
+    const headers: http.OutgoingHttpHeaders = {
       'content-type': MIME_TYPES[ext] || 'application/octet-stream',
       'cache-control': cacheControlFor(ext),
       // A validator lets an intermediary revalidate a cached copy instead of
       // serving it until its TTL runs out, which is how a release can
-      // otherwise be served stale for hours.
-      etag: `"${createHash('sha1').update(data).digest('hex').slice(0, 32)}"`,
+      // otherwise be served stale for hours. Each encoding is a different
+      // representation, so it gets its own ETag.
+      etag,
     };
-    if (req.headers['if-none-match'] === headers.etag) {
+    // The body depends on Accept-Encoding, so shared caches must key on it.
+    if (compressible) headers.vary = 'Accept-Encoding';
+    if (encoding) headers['content-encoding'] = encoding;
+    if (etagMatches(req.headers['if-none-match'], etag)) {
       res.writeHead(304, headers);
       res.end();
       return;
     }
-    res.writeHead(200, { ...headers, 'content-length': data.length });
+    const body = encoding ? await compressed(fullPath, hash, data, encoding) : data;
+    res.writeHead(200, { ...headers, 'content-length': body.length });
     // HEAD must not carry a body (curl -I, health checkers, link previews).
-    res.end(req.method === 'HEAD' ? undefined : data);
+    res.end(req.method === 'HEAD' ? undefined : body);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('Not found');
