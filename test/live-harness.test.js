@@ -13,7 +13,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
-import { startFakeGemini, tagOfChunk } from './harness/fake-gemini.mjs';
+import { OUTPUT_BYTES_PER_SECOND, startFakeGemini, sessionTag, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
 import { waitFor } from './harness/wait.mjs';
 import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
@@ -49,6 +49,8 @@ function resetFake(overrides = {}) {
     neverCompleteSetup: false,
     omitTurnComplete: false,
     rejectConnections: false,
+    burst: false,
+    transcript: null,
     ...overrides,
   });
 }
@@ -74,6 +76,7 @@ const LOUD_FRAME = (() => {
   for (let i = 0; i < b.length; i += 2) b.writeInt16LE(i % 4 ? 8000 : -8000, i);
   return b.toString('base64');
 })();
+const QUIET_FRAME = Buffer.alloc(1024).toString('base64');
 
 function streamMic(ws, ms = 32) {
   const iv = setInterval(() => {
@@ -97,7 +100,7 @@ test('one start opens exactly one upstream session, and every audio chunk the cl
   const mine = newSessions(base);
   assert.equal(mine.length, 1);
   const tags = new Set(events.filter((e) => e.type === 'audio').map((e) => e.tag));
-  assert.deepEqual([...tags], [mine[0].id * 1000]);
+  assert.deepEqual([...tags], [sessionTag(mine[0].id)]);
   ws.close();
 });
 
@@ -182,9 +185,9 @@ test('#13 when the upstream drops, the client is told to drop the queued audio o
   // Once resumed, make the new upstream speak so the ordering is observable.
   await waitFor(() => events.filter((e) => e.type === 'ready').length === 2, 3000);
   ws.send(JSON.stringify({ type: 'text', text: 'Are you still there?' }));
-  await waitFor(() => events.some((e) => e.type === 'audio' && e.tag === (newSessions(base)[1]?.id ?? -1) * 1000), 3000);
+  await waitFor(() => events.some((e) => e.type === 'audio' && newSessions(base)[1] && e.tag === sessionTag(newSessions(base)[1].id)), 3000);
   try {
-    const firstNewAudio = events.findIndex((e) => e.type === 'audio' && e.tag !== newSessions(base)[0].id * 1000);
+    const firstNewAudio = events.findIndex((e) => e.type === 'audio' && e.tag !== sessionTag(newSessions(base)[0].id));
     const reconnectIdx = events.findIndex((e) => e.type === 'reconnecting');
     const flushIdx = events.findIndex((e, i) => i > reconnectIdx && e.type === 'interrupted');
     assert.ok(reconnectIdx !== -1 && flushIdx !== -1 && firstNewAudio !== -1 && flushIdx < firstNewAudio, 'expected reconnecting -> interrupted -> new audio');
@@ -511,7 +514,7 @@ test('#21 a session writes lifecycle records (open, ready, upstream drop, end) a
 
 // --- UX: the 'thinking' state ------------------------------------------------
 
-test("the client sees a 'thinking' state between the learner's turn and the tutor's answer", { todo: "the thinking timer is re-armed by every mic frame, so it never fires while the mic streams" }, async () => {
+test("#30 the client sees a 'thinking' state between the learner's turn and the tutor's answer", async () => {
   resetFake({ firstAudioDelayMs: 900, replySeconds: 0.32 });
   const { ws, events } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));
@@ -524,6 +527,60 @@ test("the client sees a 'thinking' state between the learner's turn and the tuto
   clearInterval(iv);
   ws.close();
   assert.ok(events.some((e) => e.type === 'state' && e.value === 'thinking'));
+});
+
+// --- #27: Parley hearing its own voice ----------------------------------------
+
+// A phone whose speaker leaks into its mic: plays each audio chunk the way
+// public/audio-player.js schedules it (120 ms look-ahead, back to back),
+// heard `outputLatencyMs` later (a Bluetooth speaker: ~250 ms) and, while
+// that playback plus a short room tail lasts, streams loud frames; silence
+// otherwise. Returns how many learner turns Gemini heard.
+async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 250, tailMs = 150 } = {}) {
+  const base = gem.sessions.length;
+  const { ws, events } = await connect();
+  let playsUntil = 0;
+  ws.on('message', (raw) => {
+    const m = JSON.parse(raw.toString());
+    if (m.type !== 'audio') return;
+    const playMs = (Buffer.from(m.data, 'base64').length / OUTPUT_BYTES_PER_SECOND) * 1000;
+    playsUntil = Math.max(playsUntil, Date.now() + lookaheadMs + outputLatencyMs) + playMs;
+  });
+  ws.send(JSON.stringify({ type: 'start' }));
+  const iv = setInterval(() => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'audio', data: Date.now() < playsUntil + tailMs ? LOUD_FRAME : QUIET_FRAME }));
+  }, 32);
+  await delay(ms);
+  clearInterval(iv);
+  ws.close();
+  const [s] = newSessions(base);
+  return { phantomTurns: s.replies - 1, events };
+}
+
+for (const burst of [false, true]) {
+  test(`#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (${burst ? 'burst reply, like gemini-3.8-live' : 'streamed reply'})`, async () => {
+    resetFake({ replySeconds: 0.64, burst });
+    const { phantomTurns } = await echoingClient();
+    assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
+  });
+}
+
+test('#27 a turn heard only as a murmur is not scored or counted, and a real one still is', async () => {
+  const turnsHeardAs = async (transcript) => {
+    resetFake({ transcript, replySeconds: 0.32 });
+    const { ws, events } = await connect();
+    ws.send(JSON.stringify({ type: 'start' }));
+    await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 3000);
+    let n = 0;
+    const iv = setInterval(() => ws.send(JSON.stringify({ type: 'audio', data: n++ < 10 ? LOUD_FRAME : QUIET_FRAME })), 32);
+    await waitFor(() => events.filter((e) => e.type === 'output-text' && e.final).length >= 2, 4000);
+    await delay(300);
+    clearInterval(iv);
+    ws.close();
+    return { turns: events.filter((e) => e.type === 'turn-complete').length, reviews: events.filter((e) => e.type === 'review').length };
+  };
+  assert.deepEqual(await turnsHeardAs('Mhm.'), { turns: 0, reviews: 0 });
+  assert.deepEqual(await turnsHeardAs('I like the beach.'), { turns: 1, reviews: 1 });
 });
 
 // --- #14: hearing and honesty ------------------------------------------------

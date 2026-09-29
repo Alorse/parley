@@ -14,7 +14,7 @@ class FakeTrack {
   }
 }
 
-const opened = { streams: [], contexts: [] };
+const opened = { streams: [], contexts: [], constraints: [] };
 let pendingMic = [];
 let failWorklet = false;
 
@@ -61,7 +61,8 @@ Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
   value: {
     mediaDevices: {
-      getUserMedia() {
+      getUserMedia(constraints) {
+        opened.constraints.push(constraints);
         const d = defer();
         pendingMic.push(d);
         return d.promise.then(() => {
@@ -84,7 +85,17 @@ const grantMic = () => pendingMic.splice(0).forEach((d) => d.resolve());
 beforeEach(() => {
   opened.streams = [];
   opened.contexts = [];
+  opened.constraints = [];
   pendingMic = [];
+});
+
+test("#27 the mic asks the browser to cancel Parley's echo and suppress background noise", async () => {
+  const cap = new AudioCapture();
+  assert.equal(await startGranted(cap), true);
+  const { audio } = opened.constraints[0];
+  assert.equal(audio.echoCancellation, true);
+  assert.equal(audio.noiseSuppression, true);
+  cap.stop();
 });
 
 test('#18 a second start while the mic is opening joins it instead of opening a second mic', async () => {

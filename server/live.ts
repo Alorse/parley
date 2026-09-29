@@ -32,7 +32,13 @@ export function resolveWebSocketImpl(): any {
 const UPSTREAM_BASE =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
-const TAIL_GUARD_MS = 400;
+// How long the mic stays closed after Parley's reply has finished playing,
+// counted from when its audio would end in real time, not from turnComplete
+// (#27): it covers the trip to the phone, the player's 120 ms look-ahead,
+// the device's output latency (Bluetooth: ~250 ms) and the room's echo.
+export const TAIL_GUARD_MS = 600;
+// 'thinking' shows once the learner's words have stopped arriving for this
+// long (#30). Mic frames can't tell: an open mic streams silence too.
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
 // An app note, not a learner turn: sent bare, the tutor took the nudge as
@@ -100,7 +106,10 @@ export function buildSetupFrame({
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+          // Slower to take a faint sound (Parley's own echo) for the start of
+          // speech. speech-probe: the quiet-voice fixture is still heard word
+          // for word on 3.8 and 3.1, and the echo-only one yields less (#27).
+          startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
           endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
           silenceDurationMs: 700,
           prefixPaddingMs: 300,
@@ -168,6 +177,27 @@ export function containsStackedTurn(assistantText: string): boolean {
   return CORRECTION_INVITATION_PATTERN.test(assistantText) && assistantText.includes('?');
 }
 
+// Hesitation sounds and backchannels: on their own they are not a reply.
+const FILLER_WORD = /^(?:m+h*m*|h+m+|u+h+|u+m+|a+h+|o+h+|e+h+|e+r+m*|uhhuh|mhmm*)$/;
+// Whole "turns" seen in the production journal that were only a sound Parley
+// had misheard as a word (#27).
+const NOISE_WORDS = new Set(['un', 'ja', 'rip', 'oii']);
+
+// True when a learner turn's transcript is not speech worth answering or
+// scoring: empty, a single character, only hesitation sounds ("Mhm.",
+// "Um, uh"), or one of the noise phantoms seen live. A short real answer
+// ("Yes.", "No", "Two") is speech.
+export function isNoiseTranscript(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
+    .filter(Boolean);
+  if (words.join('').length <= 1) return true;
+  if (words.length === 1 && NOISE_WORDS.has(words[0])) return true;
+  return words.every((w) => FILLER_WORD.test(w));
+}
+
 export interface HalfDuplexGateOptions {
   tailGuardMs?: number;
   enabled?: boolean;
@@ -175,8 +205,8 @@ export interface HalfDuplexGateOptions {
 }
 
 // Pure, timestamp-based half-duplex gate: while the assistant's audio is
-// playing, and for a short tail guard after it ends, incoming mic frames are
-// dropped server-side. Timestamp-based (not setTimeout-based) so it is
+// playing, and for a tail guard after its playback ends, incoming mic frames
+// are dropped server-side. Timestamp-based (not setTimeout-based) so it is
 // trivially unit-testable with a fake clock.
 export class HalfDuplexGate {
   tailGuardMs: number;
@@ -208,9 +238,11 @@ export class HalfDuplexGate {
     this.onAssistantAudio();
   }
 
-  onTurnComplete(): void {
+  // `playbackEndsAt`: when the reply's audio finishes playing in real time,
+  // which for a reply sent in a burst is well after turnComplete.
+  onTurnComplete(playbackEndsAt = 0): void {
     this._speaking = false;
-    this._resumeAt = this._now() + this.tailGuardMs;
+    this._resumeAt = Math.max(this._now(), playbackEndsAt) + this.tailGuardMs;
   }
 
   onInterrupted(): void {
@@ -222,6 +254,11 @@ export class HalfDuplexGate {
     if (!this.enabled) return false;
     if (this._speaking) return true;
     return this._now() < this._resumeAt;
+  }
+
+  // How long until the mic opens again; 0 once it is open.
+  msUntilOpen(): number {
+    return Math.max(0, this._resumeAt - this._now());
   }
 }
 
@@ -282,6 +319,8 @@ export class SilenceNudge {
 
 interface Turn {
   userText: string;
+  // Typed, not spoken: never treated as noise.
+  typed: boolean;
   assistantText: string;
   startedAt: number;
   silent: boolean;
@@ -290,7 +329,7 @@ interface Turn {
 }
 
 function freshTurn(): Turn {
-  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false, playbackEndsAt: 0 };
+  return { userText: '', assistantText: '', typed: false, startedAt: Date.now(), silent: false, playbackEndsAt: 0 };
 }
 
 export interface GeminiLiveSessionOptions {
@@ -364,6 +403,8 @@ export class GeminiLiveSession extends EventEmitter {
   // tracks whether we've told the client we're in the 'speaking' state
   // for the turn currently in flight.
   private _speakingUi: boolean;
+  // Whether the client was told 'thinking' for the turn in flight.
+  private _thinkingUi: boolean;
   // Compliance metrics only — see containsSpokenScore/containsStackedTurn.
   // Never read back to gate or alter behaviour mid-stream.
   private _spokenScoreViolations: number;
@@ -425,6 +466,7 @@ export class GeminiLiveSession extends EventEmitter {
     this._watchdogTimer = undefined;
     this._upstreamReady = false;
     this._speakingUi = false;
+    this._thinkingUi = false;
     this._spokenScoreViolations = 0;
     this._stackedTurnViolations = 0;
   }
@@ -638,38 +680,57 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private _clearTimers(): void {
-    clearTimeout(this._thinkingTimer);
+    this._cancelThinking();
     clearTimeout(this._resumeTimer);
     clearTimeout(this._nudgeTimer);
     clearTimeout(this._watchdogTimer);
-    this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
     this._watchdogTimer = undefined;
   }
 
-  private _armThinkingTimer(): void {
+  // The learner said or typed something: once nothing more arrives for a
+  // moment, show 'thinking' until the reply starts. More words mean they are
+  // still talking; no reply at all (a sound the model let pass) hands the
+  // turn back.
+  private _armThinkingTimer(delayMs: number = THINKING_DELAY_MS): void {
     clearTimeout(this._thinkingTimer);
+    if (this._speakingUi) return;
+    if (this._thinkingUi) this._setThinking(false);
     this._thinkingTimer = setTimeout(() => {
-      this._emitClient({ type: 'state', value: 'thinking' });
-    }, THINKING_DELAY_MS);
+      this._setThinking(true);
+      this._thinkingTimer = setTimeout(() => this._setThinking(false), this.turnWatchdogMs);
+    }, delayMs);
+  }
+
+  private _cancelThinking(): void {
+    clearTimeout(this._thinkingTimer);
+    this._thinkingTimer = undefined;
+    this._thinkingUi = false;
+  }
+
+  private _setThinking(thinking: boolean): void {
+    this._thinkingUi = thinking;
+    this._emitClient({ type: 'state', value: thinking ? 'thinking' : 'listening' });
   }
 
   sendAudio(base64Data: string): boolean {
-    // Deliberately does not disarm the silence nudge: the client streams mic
-    // frames continuously and unconditionally, silence included (that's the
-    // whole reason HalfDuplexGate exists — the server is what drops frames
-    // while gated). A raw frame proves nothing; only actual transcribed
-    // speech (see the inputTranscription branch below) means the learner
-    // spoke.
-    if (this.gate.isGated() || !this._sendUpstream(audioUpstreamFrame(base64Data))) return false;
-    this._armThinkingTimer();
-    return true;
+    // Deliberately neither disarms the silence nudge nor arms 'thinking':
+    // the client streams mic frames whenever the mic is open, silence
+    // included. A raw frame proves nothing; only actual transcribed speech
+    // (see the inputTranscription branch below) means the learner spoke.
+    return !this.gate.isGated() && this._sendUpstream(audioUpstreamFrame(base64Data));
   }
 
+  // Typed text is never transcribed, so it is what the learner said this
+  // turn: without it the review saw an empty turn and answered "I didn't
+  // catch that" to everything typed.
   sendText(text: string): void {
     this._disarmSilenceNudge();
+    this.turn.userText = text;
+    this.turn.typed = true;
     this._sendTurn(text);
+    this._armThinkingTimer(0);
   }
 
   // A turn the tutor answers that is not reviewed or counted as a learner
@@ -769,7 +830,7 @@ export class GeminiLiveSession extends EventEmitter {
       }
     }
     if (gotAudio) {
-      clearTimeout(this._thinkingTimer);
+      this._cancelThinking();
       if (!this._speakingUi) {
         this._speakingUi = true;
         this._emitClient({ type: 'state', value: 'speaking' });
@@ -780,6 +841,7 @@ export class GeminiLiveSession extends EventEmitter {
 
     if (sc.inputTranscription?.text) {
       this._disarmSilenceNudge();
+      this._armThinkingTimer();
       this.turn.userText += sc.inputTranscription.text;
       this._emitClient({ type: 'input-text', text: this.turn.userText, final: false });
     }
@@ -794,9 +856,9 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private _onTurnComplete(): void {
-    const { userText, assistantText, startedAt, silent } = this.turn;
+    const { userText, assistantText, typed, startedAt, silent, playbackEndsAt } = this.turn;
     const durationMs = Date.now() - startedAt;
-    clearTimeout(this._thinkingTimer);
+    this._cancelThinking();
     clearTimeout(this._watchdogTimer);
     this._speakingUi = false;
 
@@ -815,7 +877,12 @@ export class GeminiLiveSession extends EventEmitter {
       });
     }
 
-    if (!silent) {
+    // Only a noise, a murmur or Parley's own echo was heard (#27): not a
+    // learner turn, so no score and nothing counted.
+    const noise = !silent && !typed && isNoiseTranscript(userText);
+    if (noise) this.log('noise-turn', { chars: userText.trim().length });
+
+    if (!silent && !noise) {
       this.turnsCompleted += 1;
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
       const payload: ReviewRequestPayload = {
@@ -829,15 +896,16 @@ export class GeminiLiveSession extends EventEmitter {
     }
 
     this.turn = freshTurn();
-    this._reopenMic();
+    this._reopenMic(playbackEndsAt);
   }
 
-  // Opens the mic gate after the tail guard, and tells the client then.
-  private _reopenMic(): void {
-    this.gate.onTurnComplete();
+  // Opens the mic gate once the reply has played and the tail guard has
+  // passed, and tells the client then.
+  private _reopenMic(playbackEndsAt = 0): void {
+    this.gate.onTurnComplete(playbackEndsAt);
     clearTimeout(this._resumeTimer);
     this._resumeTimer = setTimeout(() => {
       this._emitClient({ type: 'state', value: 'listening' });
-    }, this.gate.tailGuardMs);
+    }, this.gate.msUntilOpen());
   }
 }

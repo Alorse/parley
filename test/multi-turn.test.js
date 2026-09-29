@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { GeminiLiveSession, SilenceNudge } from '../server/live.js';
+import { GeminiLiveSession, SilenceNudge, TAIL_GUARD_MS } from '../server/live.js';
 import { APP_NOTE_PREFIX } from '../server/tutor.js';
 import { waitFor } from './harness/wait.mjs';
+
+const PAST_TAIL_GUARD = TAIL_GUARD_MS + 50;
 
 // A minimal stand-in for the upstream WebSocket, driven manually so a test
 // can script exactly what "Gemini" sends back without any network. Mirrors
@@ -65,6 +67,18 @@ async function startSession(options = {}) {
   return { session, ws, clientEvents };
 }
 
+// A session whose greeting has played and whose mic is open again.
+async function pastGreeting(options) {
+  const started = await startSession(options);
+  started.ws.emitServerMessage(audioChunkMessage());
+  started.ws.emitServerMessage(turnCompleteMessage());
+  await delay(PAST_TAIL_GUARD);
+  started.clientEvents.length = 0;
+  return started;
+}
+
+const statesOf = (events) => events.filter((e) => e.type === 'state').map((e) => e.value);
+
 function audioFrameCount(ws) {
   return ws.sent.filter((f) => f.realtimeInput?.audio).length;
 }
@@ -85,28 +99,31 @@ test('a live session accepts a second and third user turn after the tutor finish
   const turnCompleteEventsAfterGreeting = clientEvents.filter((e) => e.type === 'turn-complete').length;
   assert.equal(turnCompleteEventsAfterGreeting, 0, 'the greeting turn is silent, no turn-complete for it');
 
-  await delay(450); // past the 400ms tail guard
+  await delay(PAST_TAIL_GUARD); // past the tail guard
   assert.equal(session.sendAudio('turn-1-audio'), true, 'mic re-opens after the greeting finishes');
 
   // --- user turn 1 ------------------------------------------------------
+  ws.emitServerMessage(inputTranscriptionMessage('Learner turn 1'));
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
   assert.equal(session.sendAudio('gated-during-turn-1-reply'), false, 'gated again while turn 1 wraps up');
 
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
   assert.equal(session.sendAudio('turn-2-audio'), true, 'mic re-opens after turn 1 finishes');
 
   // --- user turn 2 --------------------------------------------------------
+  ws.emitServerMessage(inputTranscriptionMessage('Learner turn 2'));
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
 
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
   assert.equal(session.sendAudio('turn-3-audio'), true, 'mic re-opens after turn 2 finishes, ready for a third turn');
 
   // --- user turn 3 --------------------------------------------------------
+  ws.emitServerMessage(inputTranscriptionMessage('Learner turn 3'));
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
   assert.equal(session.sendAudio('turn-4-audio'), true, 'mic re-opens yet again after turn 3 — the gate never gets stuck');
 
   const turnCompleteEvents = clientEvents.filter((e) => e.type === 'turn-complete');
@@ -123,7 +140,7 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   let acceptedTurns = 0;
   for (let i = 0; i < 6; i++) {
@@ -131,11 +148,79 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
     if (opened) acceptedTurns += 1;
     ws.emitServerMessage(audioChunkMessage());
     ws.emitServerMessage(turnCompleteMessage());
-    await delay(450);
+    await delay(PAST_TAIL_GUARD);
   }
 
   assert.equal(acceptedTurns, 6, 'every one of 6 sequential turns found the mic open after its predecessor finished');
 
+  session.stop();
+});
+
+test('#27 a turn heard only as a murmur, a letter or nothing is not reviewed or counted', async () => {
+  const { session, ws, clientEvents } = await pastGreeting();
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  for (const heard of ['Mhm.', 'b', null, 'I went to the beach']) {
+    if (heard) ws.emitServerMessage(inputTranscriptionMessage(heard));
+    ws.emitServerMessage(audioChunkMessage());
+    ws.emitServerMessage(turnCompleteMessage());
+    await delay(PAST_TAIL_GUARD);
+  }
+
+  assert.deepEqual(reviewRequests.map((r) => r.user), ['I went to the beach']);
+  assert.equal(clientEvents.filter((e) => e.type === 'turn-complete').length, 1);
+  assert.equal(session.turnsCompleted, 1);
+
+  session.stop();
+});
+
+// --- #30: the 'thinking' state ----------------------------------------------
+
+test("#30 'thinking' shows once the learner's words stop, however long the mic keeps streaming", async () => {
+  const { session, ws, clientEvents } = await pastGreeting();
+  const iv = setInterval(() => session.sendAudio('c2lsZW5jZQ=='), 30);
+  try {
+    await delay(700);
+    assert.deepEqual(statesOf(clientEvents), [], 'mic frames alone never mean the learner finished a turn');
+    ws.emitServerMessage(inputTranscriptionMessage('I went to'));
+    await delay(300);
+    ws.emitServerMessage(inputTranscriptionMessage(' the beach'));
+    await delay(300);
+    assert.deepEqual(statesOf(clientEvents), [], 'not while words are still arriving');
+    await delay(300);
+    assert.deepEqual(statesOf(clientEvents), ['thinking']);
+    ws.emitServerMessage(audioChunkMessage());
+    assert.deepEqual(statesOf(clientEvents), ['thinking', 'speaking']);
+  } finally {
+    clearInterval(iv);
+    session.stop();
+  }
+});
+
+test("#30 more words after 'thinking' hand the turn back to the learner", async () => {
+  const { session, ws, clientEvents } = await pastGreeting();
+  ws.emitServerMessage(inputTranscriptionMessage('Well'));
+  await delay(600);
+  ws.emitServerMessage(inputTranscriptionMessage(' I think so'));
+  await delay(600);
+  assert.deepEqual(statesOf(clientEvents), ['thinking', 'listening', 'thinking']);
+  session.stop();
+});
+
+test("#30 'thinking' with no reply at all goes back to listening", async () => {
+  const { session, ws, clientEvents } = await pastGreeting({ turnWatchdogMs: 200 });
+  ws.emitServerMessage(inputTranscriptionMessage('Mhm'));
+  await delay(900);
+  assert.deepEqual(statesOf(clientEvents), ['thinking', 'listening']);
+  session.stop();
+});
+
+test("#30 a typed message shows 'thinking' at once", async () => {
+  const { session, clientEvents } = await pastGreeting();
+  session.sendText('Hello there');
+  await delay(20);
+  assert.deepEqual(statesOf(clientEvents), ['thinking']);
   session.stop();
 });
 
@@ -148,7 +233,7 @@ test('a completed turn\'s review-request payload carries the session\'s learnerN
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   ws.emitServerMessage(inputTranscriptionMessage("I'm Kenji"));
   ws.emitServerMessage(audioChunkMessage());
@@ -167,7 +252,7 @@ test('setLearnerName updates the name carried by every later review-request, onc
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   // Turn 1: the learner introduces themselves — index.ts's review-request
   // handler would call setLearnerName once review.ts reports the captured
@@ -177,7 +262,7 @@ test('setLearnerName updates the name carried by every later review-request, onc
   ws.emitServerMessage(turnCompleteMessage());
   assert.equal(reviewRequests[0].learnerName, '', 'not known yet for this first turn');
   session.setLearnerName('Priya');
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   // Turn 2: the session must now report the name on every later turn,
   // without needing a fresh 'start' handshake.
@@ -191,6 +276,22 @@ test('setLearnerName updates the name carried by every later review-request, onc
   session.stop();
 });
 
+test('a typed turn is reviewed as what the learner typed', async () => {
+  const { session, ws, clientEvents } = await pastGreeting();
+  const reviewRequests = [];
+  session.on('review-request', (payload) => reviewRequests.push(payload));
+
+  session.sendText('Yesterday I goed to the park');
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage());
+
+  assert.equal(reviewRequests.length, 1);
+  assert.equal(reviewRequests[0].user, 'Yesterday I goed to the park');
+  assert.ok(clientEvents.some((e) => e.type === 'input-text' && e.final && e.text === 'Yesterday I goed to the park'), 'shown as the learner line');
+
+  session.stop();
+});
+
 // --- scenario flows into the review request (issue #8) ---------------------
 
 test('a completed turn\'s review-request payload carries the session\'s scenario, so the review can judge a role-play goodbye in context', async () => {
@@ -200,7 +301,7 @@ test('a completed turn\'s review-request payload carries the session\'s scenario
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   ws.emitServerMessage(inputTranscriptionMessage('Goodbye, thanks for the meal!'));
   ws.emitServerMessage(audioChunkMessage());
@@ -248,7 +349,7 @@ test('armSilenceNudge speaks the nudge via say() if the learner stays silent', a
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   const sentBeforeNudge = ws.sent.length;
   session.nudge.delayMs = 30; // short delay so the test doesn't wait 6s
@@ -270,7 +371,7 @@ test('armSilenceNudge is NOT disarmed by a raw sendAudio frame — the client st
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   const sentBeforeNudge = ws.sent.length;
   session.nudge.delayMs = 30;
@@ -289,7 +390,7 @@ test('armSilenceNudge is disarmed once the learner\'s speech is actually transcr
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   const sentBeforeNudge = ws.sent.length;
   session.nudge.delayMs = 30;
@@ -310,7 +411,7 @@ test('armSilenceNudge fires at most once even if re-armed after already firing',
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   session.nudge.delayMs = 30;
   const before = ws.sent.length;
@@ -331,7 +432,7 @@ test('a nudge timer that fires a moment early re-checks instead of never nudging
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   // The clock falls 5 ms behind the timers right after arming, so the
   // timer's first check finds the nudge not yet due.

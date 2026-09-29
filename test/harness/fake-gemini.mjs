@@ -15,12 +15,13 @@
 
 import { WebSocketServer } from 'ws';
 
-const OUTPUT_BYTES_PER_SECOND = 24000 * 2;
+export const OUTPUT_BYTES_PER_SECOND = 24000 * 2;
 const INPUT_BYTES_PER_SECOND = 16000 * 2;
 
-// Sample value used to fill session N's audio: 1000, 2000, 3000...
+// Sample value used to fill session N's audio: 1000, 2000 ... 32000, then
+// round again (a PCM16 sample tops out at 32767).
 export function sessionTag(sessionId) {
-  return sessionId * 1000;
+  return (((sessionId - 1) % 32) + 1) * 1000;
 }
 
 // Reads the tag back out of a base64 PCM16 chunk (first sample).
@@ -63,6 +64,8 @@ function rms(base64) {
  * @param {boolean} [opts.sendResumptionHandles] emit sessionResumptionUpdate like the real API does
  * @param {boolean} [opts.rejectConnections] close every new connection at once (upstream down)
  * @param {number} [opts.vadThreshold]      RMS above which a mic frame counts as speech
+ * @param {string | null} [opts.transcript] what heard speech is transcribed as (default:
+ *                                          "heard N ms of speech")
  */
 export async function startFakeGemini(opts = {}) {
   const o = {
@@ -77,6 +80,7 @@ export async function startFakeGemini(opts = {}) {
     sendResumptionHandles: true,
     rejectConnections: false,
     vadThreshold: 0.02,
+    transcript: null,
     ...opts,
   };
 
@@ -172,7 +176,7 @@ export async function startFakeGemini(opts = {}) {
             const heard = Math.round(session.heardSpeechMs);
             session.heardSpeechMs = 0;
             session.silenceMs = 0;
-            send({ serverContent: { inputTranscription: { text: `heard ${heard} ms of speech` } } });
+            send({ serverContent: { inputTranscription: { text: o.transcript ?? `heard ${heard} ms of speech` } } });
             void reply(`Answer ${session.replies + 1} from session ${session.id}.`);
           }
         }

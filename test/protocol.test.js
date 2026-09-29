@@ -7,6 +7,7 @@ import {
   textUpstreamFrame,
   buildSetupFrame,
   HalfDuplexGate,
+  isNoiseTranscript,
   SilenceNudge,
   containsStackedTurn,
   resolveWebSocketImpl,
@@ -62,6 +63,22 @@ test('buildSetupFrame shapes model, voice and VAD config', () => {
   assert.deepEqual(frame.setup.outputAudioTranscription, {});
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.disabled, false);
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.silenceDurationMs, 700);
+  // #27: a faint sound is not taken for the start of speech.
+  assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.startOfSpeechSensitivity, 'START_SENSITIVITY_LOW');
+});
+
+// --- #27: noise heard as a learner turn --------------------------------------
+
+test('isNoiseTranscript: the phantom turns from the production journal are noise', () => {
+  for (const text of ['', '   ', 'Mhm.', 'un', 'b', 'Ja.', 'RIP', 'OII', 'Hmm…', 'Uh-huh.', 'Um, uh.', '.', 'I']) {
+    assert.equal(isNoiseTranscript(text), true, JSON.stringify(text));
+  }
+});
+
+test('isNoiseTranscript: short real answers are speech', () => {
+  for (const text of ['Yes.', 'No', 'OK!', 'Hi', 'Two.', 'Dog', 'Mhm, I think so.', 'Oh, I see', 'I went to the beach.']) {
+    assert.equal(isNoiseTranscript(text), false, JSON.stringify(text));
+  }
 });
 
 // --- half-duplex gating -----------------------------------------------------
@@ -89,6 +106,27 @@ test('HalfDuplexGate: mic stays gated during the tail guard, then resumes', () =
 
   now += 250; // total 450ms > 400ms tail guard
   assert.equal(gate.isGated(), false, 'gate opens after the tail guard elapses');
+});
+
+test('HalfDuplexGate: #27 the tail guard counts from when the reply finishes playing, not from turnComplete', () => {
+  let now = 1000;
+  const gate = new HalfDuplexGate({ enabled: true, tailGuardMs: 600, now: () => now });
+  gate.onAssistantAudio();
+  // A burst-sent reply: turnComplete arrives with 2 s of audio still to play.
+  gate.onTurnComplete(now + 2000);
+  assert.equal(gate.msUntilOpen(), 2600);
+  now += 2500;
+  assert.equal(gate.isGated(), true, 'still gated 500 ms after playback ended');
+  now += 150;
+  assert.equal(gate.isGated(), false);
+  assert.equal(gate.msUntilOpen(), 0);
+});
+
+test('HalfDuplexGate: #27 a playback end already in the past falls back to the tail guard from now', () => {
+  let now = 5000;
+  const gate = new HalfDuplexGate({ enabled: true, tailGuardMs: 600, now: () => now });
+  gate.onTurnComplete(now - 1000);
+  assert.equal(gate.msUntilOpen(), 600);
 });
 
 test('HalfDuplexGate: interruption opens the gate immediately', () => {

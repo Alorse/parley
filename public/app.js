@@ -19,6 +19,7 @@ import {
 import { LiveClient } from './live-client.js';
 import { AudioCapture } from './audio-capture.js';
 import { AudioPlayer } from './audio-player.js';
+import { Announcer, finishedLine, stateCue } from './announcer.js';
 
 const SETTINGS_KEY = 'parley.settings.v1';
 const DEFAULT_SETTINGS = {
@@ -98,6 +99,8 @@ const state = {
   settings: loadSettings(),
   profile: getProfile(),
   sessionStarted: false,
+  // The half-duplex setting the running conversation was started with.
+  sessionHalfDuplex: true,
   micOn: false,
   uiState: 'idle',
   lastTutorText: '',
@@ -134,6 +137,7 @@ const micWaveform = new MicWaveform(el('waveform-canvas'));
 const audioCapture = new AudioCapture();
 const audioPlayer = new AudioPlayer();
 const liveClient = new LiveClient();
+const announcer = new Announcer(el('sr-transcript'));
 
 orb.start();
 micWaveform.start(() => (state.micOn ? audioCapture.getWaveformData() : null));
@@ -179,10 +183,28 @@ function updateStatusLine() {
   el('status-line').textContent = STATUS_TEXT[state.uiState] || STATUS_TEXT.idle;
 }
 
+// Half-duplex: the mic stays closed until Parley's voice has actually been
+// heard out of this device's speaker, plus this much for the room's echo
+// (#27). The server keeps its own, estimated guard as well.
+const ECHO_TAIL_MS = 250;
+
+function micHoldMs() {
+  return state.sessionHalfDuplex ? audioPlayer.msUntilHeard(ECHO_TAIL_MS) : 0;
+}
+
+function sendMicChunk(base64) {
+  if (micHoldMs() > 0) return;
+  liveClient.sendAudio(base64);
+}
+
+let listeningTimer = 0;
+
 /** @param {string} value one of the STATUS_TEXT keys */
 function setUiState(value) {
+  clearTimeout(listeningTimer);
   state.uiState = value;
   updateStatusLine();
+  el('sr-status').textContent = stateCue(value);
   orb.setState(value === 'reconnecting' ? 'thinking' : value);
   updateWaveformVisibility();
 }
@@ -391,6 +413,7 @@ async function ensureSession() {
   claimConversation();
   state.conversationCorrections = [];
   state.hadTurn = false;
+  state.sessionHalfDuplex = state.settings.halfDuplex;
   connectPromise = liveClient
     .connect({
       scenario: state.scenario,
@@ -437,16 +460,15 @@ liveClient.addEventListener('message', (event) => {
     case 'ready':
       hideError();
       break;
-    case 'state':
-      if (msg.value === 'speaking' && state.uiState !== 'speaking') {
-        el('tutor-translation').classList.add('hidden');
-      }
-      setUiState(msg.value);
-      if (msg.value === 'listening' && state.pendingEndConversation) {
-        state.pendingEndConversation = false;
-        endSession();
-      }
+    case 'state': {
+      // The server's 'listening' can come while this device is still
+      // playing the reply: say so only once the mic really is open.
+      const wait = msg.value === 'listening' ? micHoldMs() : 0;
+      clearTimeout(listeningTimer);
+      if (wait > 0) listeningTimer = window.setTimeout(() => applyServerState('listening'), wait);
+      else applyServerState(msg.value);
       break;
+    }
     case 'audio':
       audioPlayer.enqueuePcm16(msg.data);
       break;
@@ -456,9 +478,11 @@ liveClient.addEventListener('message', (event) => {
       // talking, so the close is stale and must not fire.
       state.pendingEndConversation = false;
       updateUserLine(msg.text, msg.final);
+      announcer.say(finishedLine(msg));
       break;
     case 'output-text':
       updateTutorLine(msg.text, msg.final);
+      announcer.say(finishedLine(msg));
       break;
     case 'interrupted':
       // The learner spoke over the tutor — clearly still engaged, so a
@@ -488,6 +512,17 @@ liveClient.addEventListener('message', (event) => {
       break;
   }
 });
+
+function applyServerState(value) {
+  if (value === 'speaking' && state.uiState !== 'speaking') {
+    el('tutor-translation').classList.add('hidden');
+  }
+  setUiState(value);
+  if (value === 'listening' && state.pendingEndConversation) {
+    state.pendingEndConversation = false;
+    endSession();
+  }
+}
 
 // Everything a finished session releases, however it ended.
 function teardownSession() {
@@ -538,6 +573,7 @@ conversationChannel?.addEventListener('message', (event) => {
 
 function updateMicUI() {
   el('mic-btn').classList.toggle('on', state.micOn);
+  el('mic-btn').setAttribute('aria-pressed', String(state.micOn));
   el('mic-status').textContent = state.micOn ? 'Microphone on' : 'Microphone off';
   updateWaveformVisibility();
 }
@@ -562,7 +598,7 @@ el('mic-btn').addEventListener('click', async () => {
     if (!state.micOn) {
       // false when the session ended while the mic was opening: teardown
       // already stopped it, so it stays off.
-      state.micOn = await audioCapture.start((base64) => liveClient.sendAudio(base64));
+      state.micOn = await audioCapture.start(sendMicChunk);
     } else {
       audioCapture.stop();
       state.micOn = false;
@@ -609,6 +645,7 @@ el('meaning-btn').addEventListener('click', async () => {
     const data = await res.json();
     translation.textContent = data.text;
     translation.classList.remove('hidden');
+    announcer.say(`Meaning: ${data.text}`);
   } catch {
     showError("Couldn't fetch the translation right now.");
   }
@@ -852,7 +889,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=10').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=11').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

@@ -70,7 +70,9 @@ Events: `open`, `busy`, `start`, `upstream-ready` (model, setup time),
 `upstream-error`, `upstream-close` (close code, reason, how long it was up),
 `reconnecting`, `going-away`, `gave-up`, `start-failed`, `replaced` (a newer
 conversation on the same device took over), `idle` (closed after the idle
-limit), and `end` (duration, learner turns, reconnects, client close code).
+limit), `noise-turn` (a spoken turn heard only as a murmur, a single letter or
+nothing, so it was not scored; carries its length only), and `end` (duration,
+learner turns, reconnects, client close code).
 They carry lifecycle metadata only — never speech, transcripts, audio, the API key or resumption handles
 (`server/session-log.ts`).
 
@@ -158,7 +160,8 @@ npm test                                   # includes test/live-harness.test.js:
 node scripts/repro-browser.mjs [scenario ...]   # headless Chrome + fake mic
             # + real server + fake upstream; instruments playback buffers,
             # sockets, mic streams. Scenarios: double-tap, server-restart,
-            # end-restart, echo-window, upstream-drop-twice, two-tabs, idle-cpu
+            # end-restart, echo-window, echo-bluetooth, screen-reader,
+            # upstream-drop-twice, two-tabs, idle-cpu
 node scripts/perf-server.mjs               # server CPU/RSS per live session (offline)
 
 # These three spend real quota — keep runs small:
