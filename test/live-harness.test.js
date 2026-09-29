@@ -13,7 +13,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
-import { startFakeGemini, sessionTag, tagOfChunk } from './harness/fake-gemini.mjs';
+import { OUTPUT_BYTES_PER_SECOND, startFakeGemini, sessionTag, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
 import { waitFor } from './harness/wait.mjs';
 import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
@@ -76,6 +76,7 @@ const LOUD_FRAME = (() => {
   for (let i = 0; i < b.length; i += 2) b.writeInt16LE(i % 4 ? 8000 : -8000, i);
   return b.toString('base64');
 })();
+const QUIET_FRAME = Buffer.alloc(1024).toString('base64');
 
 function streamMic(ws, ms = 32) {
   const iv = setInterval(() => {
@@ -542,13 +543,12 @@ async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 2
   ws.on('message', (raw) => {
     const m = JSON.parse(raw.toString());
     if (m.type !== 'audio') return;
-    const playMs = (Buffer.from(m.data, 'base64').length / 48000) * 1000;
+    const playMs = (Buffer.from(m.data, 'base64').length / OUTPUT_BYTES_PER_SECOND) * 1000;
     playsUntil = Math.max(playsUntil, Date.now() + lookaheadMs + outputLatencyMs) + playMs;
   });
   ws.send(JSON.stringify({ type: 'start' }));
-  const quiet = Buffer.alloc(1024).toString('base64');
   const iv = setInterval(() => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'audio', data: Date.now() < playsUntil + tailMs ? LOUD_FRAME : quiet }));
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'audio', data: Date.now() < playsUntil + tailMs ? LOUD_FRAME : QUIET_FRAME }));
   }, 32);
   await delay(ms);
   clearInterval(iv);
@@ -557,17 +557,13 @@ async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 2
   return { phantomTurns: s.replies - 1, events };
 }
 
-test('#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (streamed reply)', async () => {
-  resetFake({ replySeconds: 0.64 });
-  const { phantomTurns } = await echoingClient();
-  assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
-});
-
-test('#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (burst reply, like gemini-3.8-live)', async () => {
-  resetFake({ replySeconds: 0.64, burst: true });
-  const { phantomTurns } = await echoingClient();
-  assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
-});
+for (const burst of [false, true]) {
+  test(`#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (${burst ? 'burst reply, like gemini-3.8-live' : 'streamed reply'})`, async () => {
+    resetFake({ replySeconds: 0.64, burst });
+    const { phantomTurns } = await echoingClient();
+    assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
+  });
+}
 
 test('#27 a turn heard only as a murmur is not scored or counted, and a real one still is', async () => {
   const turnsHeardAs = async (transcript) => {
@@ -575,9 +571,8 @@ test('#27 a turn heard only as a murmur is not scored or counted, and a real one
     const { ws, events } = await connect();
     ws.send(JSON.stringify({ type: 'start' }));
     await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 3000);
-    const quiet = Buffer.alloc(1024).toString('base64');
     let n = 0;
-    const iv = setInterval(() => ws.send(JSON.stringify({ type: 'audio', data: n++ < 10 ? LOUD_FRAME : quiet })), 32);
+    const iv = setInterval(() => ws.send(JSON.stringify({ type: 'audio', data: n++ < 10 ? LOUD_FRAME : QUIET_FRAME })), 32);
     await waitFor(() => events.filter((e) => e.type === 'output-text' && e.final).length >= 2, 4000);
     await delay(300);
     clearInterval(iv);

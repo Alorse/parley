@@ -15,7 +15,7 @@
 
 import { WebSocketServer } from 'ws';
 
-const OUTPUT_BYTES_PER_SECOND = 24000 * 2;
+export const OUTPUT_BYTES_PER_SECOND = 24000 * 2;
 const INPUT_BYTES_PER_SECOND = 16000 * 2;
 
 // Sample value used to fill session N's audio: 1000, 2000 ... 32000, then

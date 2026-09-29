@@ -64,13 +64,14 @@ if (!CHROME) {
 const INSTRUMENT = `(() => {
   const P = (window.__parley = { sources: [], sockets: [], streams: [], listening: [], listeningShown: [], states: [], rafCalls: 0, framesWhilePlaying: 0, srStatus: [], srLines: [] });
   // Tutor audio still to be heard on this device, in ms (negative: heard
-  // that long ago), counting the device's output latency.
+  // that long ago), counting the output latency the way
+  // AudioPlayer.msUntilHeard() does.
   const stillToPlayMs = () => {
     const ctx = P.lastCtx;
     if (!ctx) return null;
-    const maxEnd = Math.max(0, ...(ctx.__ends || [0]));
-    return Math.round((maxEnd + (ctx.outputLatency || 0) - ctx.currentTime) * 1000);
+    return Math.round(((ctx.__maxEnd || 0) + (ctx.outputLatency || ctx.baseLatency || 0) - ctx.currentTime) * 1000);
   };
+  const TEXT_CHANGES = { childList: true, characterData: true, subtree: true };
   const origStart = AudioBufferSourceNode.prototype.start;
   AudioBufferSourceNode.prototype.start = function (when = 0, ...rest) {
     try {
@@ -81,7 +82,7 @@ const INSTRUMENT = `(() => {
       const at = Math.max(when, ctx.currentTime);
       const rec = { ctx: ctx.__pid, at, end: at + (b ? b.duration : 0), tag, wall: performance.now() };
       P.sources.push(rec);
-      (ctx.__ends = ctx.__ends || []).push(rec.end);
+      ctx.__maxEnd = Math.max(ctx.__maxEnd || 0, rec.end);
       P.lastCtx = ctx;
     } catch (e) {}
     return origStart.call(this, when, ...rest);
@@ -133,11 +134,11 @@ const INSTRUMENT = `(() => {
     if (!line) return;
     new MutationObserver(() => {
       if (line.textContent === 'Listening…') P.listeningShown.push(stillToPlayMs());
-    }).observe(line, { childList: true, characterData: true, subtree: true });
+    }).observe(line, TEXT_CHANGES);
     // What a screen reader is given: the turn cues and the finished lines.
     const status = document.getElementById('sr-status');
     const log = document.getElementById('sr-transcript');
-    if (status) new MutationObserver(() => status.textContent && P.srStatus.push(status.textContent)).observe(status, { childList: true, characterData: true, subtree: true });
+    if (status) new MutationObserver(() => status.textContent && P.srStatus.push(status.textContent)).observe(status, TEXT_CHANGES);
     if (log) new MutationObserver((records) => records.forEach((r) => r.addedNodes.forEach((n) => P.srLines.push(n.textContent)))).observe(log, { childList: true });
   });
   const origRaf = window.requestAnimationFrame.bind(window);

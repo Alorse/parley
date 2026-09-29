@@ -680,12 +680,10 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private _clearTimers(): void {
-    this._thinkingUi = false;
-    clearTimeout(this._thinkingTimer);
+    this._cancelThinking();
     clearTimeout(this._resumeTimer);
     clearTimeout(this._nudgeTimer);
     clearTimeout(this._watchdogTimer);
-    this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
     this._watchdogTimer = undefined;
@@ -703,6 +701,12 @@ export class GeminiLiveSession extends EventEmitter {
       this._setThinking(true);
       this._thinkingTimer = setTimeout(() => this._setThinking(false), this.turnWatchdogMs);
     }, delayMs);
+  }
+
+  private _cancelThinking(): void {
+    clearTimeout(this._thinkingTimer);
+    this._thinkingTimer = undefined;
+    this._thinkingUi = false;
   }
 
   private _setThinking(thinking: boolean): void {
@@ -826,8 +830,7 @@ export class GeminiLiveSession extends EventEmitter {
       }
     }
     if (gotAudio) {
-      clearTimeout(this._thinkingTimer);
-      this._thinkingUi = false;
+      this._cancelThinking();
       if (!this._speakingUi) {
         this._speakingUi = true;
         this._emitClient({ type: 'state', value: 'speaking' });
@@ -855,8 +858,7 @@ export class GeminiLiveSession extends EventEmitter {
   private _onTurnComplete(): void {
     const { userText, assistantText, typed, startedAt, silent, playbackEndsAt } = this.turn;
     const durationMs = Date.now() - startedAt;
-    clearTimeout(this._thinkingTimer);
-    this._thinkingUi = false;
+    this._cancelThinking();
     clearTimeout(this._watchdogTimer);
     this._speakingUi = false;
 

@@ -67,6 +67,18 @@ async function startSession(options = {}) {
   return { session, ws, clientEvents };
 }
 
+// A session whose greeting has played and whose mic is open again.
+async function pastGreeting(options) {
+  const started = await startSession(options);
+  started.ws.emitServerMessage(audioChunkMessage());
+  started.ws.emitServerMessage(turnCompleteMessage());
+  await delay(PAST_TAIL_GUARD);
+  started.clientEvents.length = 0;
+  return started;
+}
+
+const statesOf = (events) => events.filter((e) => e.type === 'state').map((e) => e.value);
+
 function audioFrameCount(ws) {
   return ws.sent.filter((f) => f.realtimeInput?.audio).length;
 }
@@ -145,17 +157,15 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
 });
 
 test('#27 a turn heard only as a murmur, a letter or nothing is not reviewed or counted', async () => {
-  const { session, ws, clientEvents } = await startSession();
+  const { session, ws, clientEvents } = await pastGreeting();
   const reviewRequests = [];
   session.on('review-request', (payload) => reviewRequests.push(payload));
 
-  ws.emitServerMessage(audioChunkMessage());
-  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
   for (const heard of ['Mhm.', 'b', null, 'I went to the beach']) {
-    await delay(PAST_TAIL_GUARD);
     if (heard) ws.emitServerMessage(inputTranscriptionMessage(heard));
     ws.emitServerMessage(audioChunkMessage());
     ws.emitServerMessage(turnCompleteMessage());
+    await delay(PAST_TAIL_GUARD);
   }
 
   assert.deepEqual(reviewRequests.map((r) => r.user), ['I went to the beach']);
@@ -166,17 +176,6 @@ test('#27 a turn heard only as a murmur, a letter or nothing is not reviewed or 
 });
 
 // --- #30: the 'thinking' state ----------------------------------------------
-
-const statesOf = (events) => events.filter((e) => e.type === 'state').map((e) => e.value);
-
-async function pastGreeting(options) {
-  const started = await startSession(options);
-  started.ws.emitServerMessage(audioChunkMessage());
-  started.ws.emitServerMessage(turnCompleteMessage());
-  await delay(PAST_TAIL_GUARD);
-  started.clientEvents.length = 0;
-  return started;
-}
 
 test("#30 'thinking' shows once the learner's words stop, however long the mic keeps streaming", async () => {
   const { session, ws, clientEvents } = await pastGreeting();
@@ -278,13 +277,9 @@ test('setLearnerName updates the name carried by every later review-request, onc
 });
 
 test('a typed turn is reviewed as what the learner typed', async () => {
-  const { session, ws, clientEvents } = await startSession();
+  const { session, ws, clientEvents } = await pastGreeting();
   const reviewRequests = [];
   session.on('review-request', (payload) => reviewRequests.push(payload));
-
-  ws.emitServerMessage(audioChunkMessage());
-  ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
-  await delay(PAST_TAIL_GUARD);
 
   session.sendText('Yesterday I goed to the park');
   ws.emitServerMessage(audioChunkMessage());
