@@ -14,13 +14,15 @@
 //   - every /live WebSocket opened/closed, and every mic frame sent on it
 //   - every getUserMedia stream and whether its tracks are still live
 //   - for each 'state: listening' message (the moment the server re-opens
-//     the mic), how much already-scheduled tutor audio is still left to play
-//     -> the window in which Parley's own voice can leak back into the mic.
+//     the mic) and each time the screen starts saying "Listening…", how much
+//     tutor audio is still to be heard (output latency included), and every
+//     mic frame sent while it is -> the window in which Parley's own voice
+//     can leak back into the mic.
 //
 // Usage:
 //   node scripts/repro-browser.mjs [scenario ...] [--port N] [--json out.json]
 // Scenarios: double-tap, server-restart, end-restart, echo-window,
-//            upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
+//            echo-bluetooth, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
 //
 // Needs Chrome/Chromium (CHROME_PATH or the usual locations). The scratch
 // server is started on a free port (or --port) and stopped by PID only.
@@ -41,7 +43,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
 };
-const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
+const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
 const flagValues = new Set([flag('--port'), flag('--json')]);
 const requested = argv.filter((a) => !a.startsWith('--') && !flagValues.has(a));
 const scenarios = requested.length ? requested : ALL;
@@ -60,7 +62,15 @@ if (!CHROME) {
 // Injected before any page script. Kept dependency-free and defensive: it
 // must never change app behaviour, only observe it.
 const INSTRUMENT = `(() => {
-  const P = (window.__parley = { sources: [], sockets: [], streams: [], listening: [], states: [], rafCalls: 0 });
+  const P = (window.__parley = { sources: [], sockets: [], streams: [], listening: [], listeningShown: [], states: [], rafCalls: 0, framesWhilePlaying: 0 });
+  // Tutor audio still to be heard on this device, in ms (negative: heard
+  // that long ago), counting the device's output latency.
+  const stillToPlayMs = () => {
+    const ctx = P.lastCtx;
+    if (!ctx) return null;
+    const maxEnd = Math.max(0, ...(ctx.__ends || [0]));
+    return Math.round((maxEnd + (ctx.outputLatency || 0) - ctx.currentTime) * 1000);
+  };
   const origStart = AudioBufferSourceNode.prototype.start;
   AudioBufferSourceNode.prototype.start = function (when = 0, ...rest) {
     try {
@@ -90,9 +100,7 @@ const INSTRUMENT = `(() => {
           if (m.type === 'state') {
             P.states.push({ value: m.value, wall: performance.now() });
             if (m.value === 'listening' && P.lastCtx) {
-              const ctx = P.lastCtx;
-              const maxEnd = Math.max(0, ...(ctx.__ends || [0]));
-              P.listening.push({ stillToPlayMs: Math.round((maxEnd - ctx.currentTime) * 1000), outputLatencyMs: Math.round((ctx.outputLatency || 0) * 1000), wall: performance.now() });
+              P.listening.push({ stillToPlayMs: stillToPlayMs(), outputLatencyMs: Math.round((P.lastCtx.outputLatency || 0) * 1000), wall: performance.now() });
             }
           }
         } catch (err) {}
@@ -102,6 +110,7 @@ const INSTRUMENT = `(() => {
         try {
           if (typeof data === 'string' && data.startsWith('{"type":"audio"')) {
             rec.framesSent++;
+            if ((stillToPlayMs() ?? -1) > 0) P.framesWhilePlaying++;
             const now = performance.now();
             if (rec.firstFrameAt === null) rec.firstFrameAt = now;
             rec.lastFrameAt = now;
@@ -117,6 +126,15 @@ const INSTRUMENT = `(() => {
     P.streams.push(s);
     return s;
   };
+  // When the screen starts saying "Listening…", how much tutor audio is
+  // still to be heard.
+  document.addEventListener('DOMContentLoaded', () => {
+    const line = document.getElementById('status-line');
+    if (!line) return;
+    new MutationObserver(() => {
+      if (line.textContent === 'Listening…') P.listeningShown.push(stillToPlayMs());
+    }).observe(line, { childList: true, characterData: true, subtree: true });
+  });
   const origRaf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = (cb) => { P.rafCalls++; return origRaf(cb); };
   P.summary = () => {
@@ -144,6 +162,8 @@ const INSTRUMENT = `(() => {
       upstreamSessionsHeard: tags.length,
       interleavedSwitches: switches,
       listeningStillToPlayMs: P.listening.map((l) => l.stillToPlayMs),
+      listeningShownStillToPlayMs: P.listeningShown,
+      micFramesSentWhilePlaying: P.framesWhilePlaying,
       outputLatencyMs: P.listening.map((l) => l.outputLatencyMs),
       states: P.states.map((s) => s.value).join(','),
       status: document.getElementById('status-line')?.textContent,
@@ -261,6 +281,36 @@ async function withRig(geminiOpts, fn) {
   }
 }
 
+// Normal conversation with realistic pacing (audio sent in a burst,
+// turnComplete held until real-time playback would end, 700 ms think time
+// — all measured live with scripts/live-probe.mjs). Measures how much tutor
+// audio is still to be heard (device output latency included) when the
+// server re-opens the mic ('state: listening') and when the screen says
+// "Listening…", and how many mic frames were sent while it was still
+// playing. Negative = that many ms AFTER playback ended, i.e. the margin.
+async function echoWindow({ outputLatencyMs = null } = {}) {
+  return withRig({ replySeconds: 4, firstAudioDelayMs: 700, burst: true }, async ({ chrome, srv, gem }) => {
+    const page = await chrome.newPage(srv.url);
+    if (outputLatencyMs !== null) {
+      await page.eval(`Object.defineProperty(AudioContext.prototype, 'outputLatency', { get: () => ${outputLatencyMs / 1000} }), true`);
+    }
+    await page.click('mic-btn');
+    await sleep(25000);
+    const s = await page.summary();
+    const upstream = gem.sessions[0];
+    return {
+      expected: 'mic re-opens only after Parley has finished playing (stillToPlay < 0, with margin for network + device output latency)',
+      turns: upstream?.replies,
+      listeningStillToPlayMs: s.listeningStillToPlayMs,
+      listeningShownStillToPlayMs: s.listeningShownStillToPlayMs,
+      micFramesSentWhilePlaying: s.micFramesSentWhilePlaying,
+      outputLatencyMs: s.outputLatencyMs,
+      thinkingStatesSeen: s.states.split(',').filter((v) => v === 'thinking').length,
+      states: s.states,
+    };
+  });
+}
+
 // 16 kHz / 512-sample worklet chunks = 31.25 mic frames per second for ONE pipeline.
 const ONE_PIPELINE_FPS = 31.25;
 
@@ -336,29 +386,15 @@ const SCENARIOS = {
     });
   },
 
-  // Normal conversation with realistic pacing (audio sent in a burst,
-  // turnComplete held until real-time playback would end, 700 ms think time
-  // — all measured live with scripts/live-probe.mjs). Measures how much
-  // tutor audio is still queued to play at the moment the server re-opens
-  // the mic ('state: listening'). Negative = mic re-opened that many ms
-  // AFTER playback ended, i.e. the safety margin; network round trip and the
-  // device's output latency (Bluetooth, Android) eat into it on a phone.
+  // See echoWindow().
   async 'echo-window'() {
-    return withRig({ replySeconds: 4, firstAudioDelayMs: 700, burst: true }, async ({ chrome, srv, gem }) => {
-      const page = await chrome.newPage(srv.url);
-      await page.click('mic-btn');
-      await sleep(25000);
-      const s = await page.summary();
-      const upstream = gem.sessions[0];
-      return {
-        expected: 'mic re-opens only after Parley has finished playing (stillToPlay < 0, with margin for network + device output latency)',
-        turns: upstream?.replies,
-        listeningStillToPlayMs: s.listeningStillToPlayMs,
-        outputLatencyMs: s.outputLatencyMs,
-        thinkingStatesSeen: s.states.split(',').filter((v) => v === 'thinking').length,
-        states: s.states,
-      };
-    });
+    return echoWindow();
+  },
+
+  // The same, on a device whose speaker is heard 250 ms late (a Bluetooth
+  // speaker or headset; headless Chrome itself reports ~30 ms).
+  async 'echo-bluetooth'() {
+    return echoWindow({ outputLatencyMs: 250 });
   },
 
   // Gemini drops the connection twice (observed live: close 1011 after ~8 min).
