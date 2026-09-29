@@ -36,9 +36,11 @@
       </div>
 
       <p id="status-line" class="status-line">Ready when you are</p>
+      <p id="sr-status" class="visually-hidden" role="status"></p>
+      <div id="sr-transcript" class="visually-hidden" role="log" aria-label="Conversation"></div>
       <canvas id="waveform-canvas" class="waveform-canvas hidden" aria-hidden="true"></canvas>
 
-      <section id="transcript" class="transcript" aria-live="polite">
+      <section id="transcript" class="transcript">
         <p id="empty-prompt" class="empty-prompt">Tap the microphone and say hello</p>
         <p id="tutor-line" class="tutor-line hidden"></p>
         <p id="tutor-translation" class="tutor-translation hidden"></p>
@@ -59,7 +61,7 @@
           <button id="meaning-btn" class="control-btn control-btn--butter" type="button" aria-label="Meaning" data-icon="bubble"></button>
           <span class="control-label">Meaning</span>
         </div>
-        <button id="mic-btn" class="mic-btn" type="button" aria-label="Toggle microphone" data-icon="mic"></button>
+        <button id="mic-btn" class="mic-btn" type="button" aria-label="Microphone" aria-pressed="false" data-icon="mic"></button>
         <div class="control" id="end-control">
           <button id="end-btn" class="control-btn control-btn--cream" type="button" aria-label="End" data-icon="hangup" disabled></button>
           <span class="control-label">End</span>

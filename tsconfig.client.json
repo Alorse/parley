@@ -18,6 +18,7 @@
     "public/data.js",
     "public/icons.js",
     "public/audio-capture.js",
-    "public/audio-player.js"
+    "public/audio-player.js",
+    "public/announcer.js"
   ]
 }

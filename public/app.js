@@ -19,6 +19,7 @@ import {
 import { LiveClient } from './live-client.js';
 import { AudioCapture } from './audio-capture.js';
 import { AudioPlayer } from './audio-player.js';
+import { Announcer, finishedLine, stateCue } from './announcer.js';
 
 const SETTINGS_KEY = 'parley.settings.v1';
 const DEFAULT_SETTINGS = {
@@ -136,6 +137,7 @@ const micWaveform = new MicWaveform(el('waveform-canvas'));
 const audioCapture = new AudioCapture();
 const audioPlayer = new AudioPlayer();
 const liveClient = new LiveClient();
+const announcer = new Announcer(el('sr-transcript'));
 
 orb.start();
 micWaveform.start(() => (state.micOn ? audioCapture.getWaveformData() : null));
@@ -202,6 +204,7 @@ function setUiState(value) {
   clearTimeout(listeningTimer);
   state.uiState = value;
   updateStatusLine();
+  el('sr-status').textContent = stateCue(value);
   orb.setState(value === 'reconnecting' ? 'thinking' : value);
   updateWaveformVisibility();
 }
@@ -475,9 +478,11 @@ liveClient.addEventListener('message', (event) => {
       // talking, so the close is stale and must not fire.
       state.pendingEndConversation = false;
       updateUserLine(msg.text, msg.final);
+      announcer.say(finishedLine(msg));
       break;
     case 'output-text':
       updateTutorLine(msg.text, msg.final);
+      announcer.say(finishedLine(msg));
       break;
     case 'interrupted':
       // The learner spoke over the tutor — clearly still engaged, so a
@@ -568,6 +573,7 @@ conversationChannel?.addEventListener('message', (event) => {
 
 function updateMicUI() {
   el('mic-btn').classList.toggle('on', state.micOn);
+  el('mic-btn').setAttribute('aria-pressed', String(state.micOn));
   el('mic-status').textContent = state.micOn ? 'Microphone on' : 'Microphone off';
   updateWaveformVisibility();
 }
@@ -639,6 +645,7 @@ el('meaning-btn').addEventListener('click', async () => {
     const data = await res.json();
     translation.textContent = data.text;
     translation.classList.remove('hidden');
+    announcer.say(`Meaning: ${data.text}`);
   } catch {
     showError("Couldn't fetch the translation right now.");
   }

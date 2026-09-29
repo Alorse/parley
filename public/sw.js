@@ -25,6 +25,7 @@ const APP_SHELL = [
   '/live-client.js',
   '/audio-capture.js',
   '/audio-player.js',
+  '/announcer.js',
   '/pcm-worklet.js',
   '/manifest.webmanifest',
   '/fonts/manrope-latin.woff2',
