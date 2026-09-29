@@ -22,7 +22,8 @@
 // Usage:
 //   node scripts/repro-browser.mjs [scenario ...] [--port N] [--json out.json]
 // Scenarios: double-tap, server-restart, end-restart, echo-window,
-//            echo-bluetooth, screen-reader, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
+//            echo-bluetooth, screen-reader, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu,
+//            sw-offline   (default: all)
 //
 // Needs Chrome/Chromium (CHROME_PATH or the usual locations). The scratch
 // server is started on a free port (or --port) and stopped by PID only.
@@ -43,7 +44,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
 };
-const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
+const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu', 'sw-offline'];
 const flagValues = new Set([flag('--port'), flag('--json')]);
 const requested = argv.filter((a) => !a.startsWith('--') && !flagValues.has(a));
 const scenarios = requested.length ? requested : ALL;
@@ -526,6 +527,30 @@ const SCENARIOS = {
         taskMsPerSecond: +(((m1.TaskDuration - m0.TaskDuration) * 1000) / 10).toFixed(1),
         jsHeapMB: +(m1.JSHeapUsedSize / 1048576).toFixed(1),
       };
+    });
+  },
+
+  // The service worker with compressed responses (#25): what the page was
+  // sent on the wire, that the cached shell decodes to the real files, and
+  // that the app still opens offline from that cache.
+  async 'sw-offline'() {
+    return withRig({}, async ({ chrome, srv }) => {
+      const page = await chrome.newPage(srv.url);
+      await page.eval(`navigator.serviceWorker.ready.then(() => new Promise((r) => setTimeout(r, 1500)))`);
+      const online = await page.eval(`(async () => {
+        const wire = Object.fromEntries(performance.getEntriesByType('resource').filter((e) => /\\.(js|css)/.test(e.name))
+          .map((e) => [new URL(e.name).pathname, { encoded: e.encodedBodySize, decoded: e.decodedBodySize }]));
+        const cache = await caches.open((await caches.keys())[0]);
+        const cached = await (await cache.match('/app.js')).text();
+        const fresh = await (await fetch('/app.js', { cache: 'no-store' })).text();
+        return { cacheNames: await caches.keys(), cachedEntries: (await cache.keys()).length, cachedAppJsMatches: cached === fresh, wire };
+      })()`);
+      await page.send('Network.enable');
+      await page.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      await page.send('Page.reload', { ignoreCache: false });
+      await sleep(2000);
+      const offline = await page.eval(`({ title: document.title, micButton: !!document.getElementById('mic-btn'), controlled: !!navigator.serviceWorker.controller })`);
+      return { expected: 'compressed on the wire, cache decodes to the real file, opens offline', online, offline, errors: page.console };
     });
   },
 };
