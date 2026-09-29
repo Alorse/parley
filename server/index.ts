@@ -213,6 +213,29 @@ wss.on('connection', (ws) => {
     endConnection('replaced');
   };
 
+  // Closes a conversation nobody is taking part in any more (#20): the tab
+  // left open, the phone put down with the mic on. Mic frames don't count,
+  // since an open mic streams silence too; transcribed speech, typed text
+  // and taps do. A socket that never starts is covered as well.
+  let lastActivityAt = openedAt;
+  let idleTimer: NodeJS.Timeout | undefined;
+  const noteActivity = () => {
+    lastActivityAt = Date.now();
+  };
+  const checkIdle = () => {
+    const left = lastActivityAt + config.liveIdleTimeoutMs - Date.now();
+    if (left > 0) {
+      idleTimer = setTimeout(checkIdle, left);
+      return;
+    }
+    log('idle', { idleMs: Date.now() - lastActivityAt });
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: 'error', message: 'The conversation was closed after a few quiet minutes. Tap the microphone to start again.', code: 'idle' }));
+    }
+    endConnection('idle');
+  };
+  if (config.liveIdleTimeoutMs > 0) idleTimer = setTimeout(checkIdle, config.liveIdleTimeoutMs);
+
   const pingInterval = setInterval(() => {
     if (!alive) {
       ws.terminate();
@@ -233,6 +256,8 @@ wss.on('connection', (ws) => {
     } catch {
       return;
     }
+
+    if (msg.type !== 'audio') noteActivity();
 
     if (msg.type === 'start') {
       // One conversation per socket: a second start would open a second
@@ -290,6 +315,9 @@ wss.on('connection', (ws) => {
         });
 
         candidate.on('client', (clientMsg: LiveEventMessage) => {
+          // Only the running transcript is speech arriving; the final copy
+          // is re-sent at every turn end, the tutor's own turns included.
+          if (clientMsg.type === 'input-text' && !clientMsg.final) noteActivity();
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(clientMsg));
         });
 
@@ -349,6 +377,7 @@ wss.on('connection', (ws) => {
   ws.on('close', (code) => {
     alive = false;
     clearInterval(pingInterval);
+    clearTimeout(idleTimer);
     release();
     if (conversationsByClient.get(clientId) === replaced) conversationsByClient.delete(clientId);
     if (pending) pending.stop();

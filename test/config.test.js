@@ -95,3 +95,9 @@ test('buildConfig reads the live setup timeout and turn watchdog', () => {
   assert.equal(set.liveSetupTimeoutMs, 1000);
   assert.equal(set.liveTurnWatchdogMs, 1500);
 });
+
+test('#20 buildConfig reads the idle limit, 5 minutes by default and 0 to disable it', () => {
+  assert.equal(buildConfig({ GOOGLE_API_KEY: 'k' }).liveIdleTimeoutMs, 300000);
+  assert.equal(buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_IDLE_TIMEOUT_MS: '0' }).liveIdleTimeoutMs, 0);
+  assert.equal(buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_IDLE_TIMEOUT_MS: 'soon' }).liveIdleTimeoutMs, 300000);
+});
