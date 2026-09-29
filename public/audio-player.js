@@ -69,6 +69,18 @@ export class AudioPlayer {
     return Math.sqrt(sum / data.length);
   }
 
+  /**
+   * How long until everything queued so far has been heard, counting the
+   * device's own output delay (a Bluetooth speaker: ~250 ms), plus `tailMs`;
+   * 0 once it has.
+   * @param {number} [tailMs]
+   */
+  msUntilHeard(tailMs = 0) {
+    if (!this.ctx) return 0;
+    const latency = this.ctx.outputLatency || this.ctx.baseLatency || 0;
+    return Math.max(0, (this.nextStartTime + latency - this.ctx.currentTime) * 1000 + tailMs);
+  }
+
   async enqueuePcm16(base64Data) {
     await this.ensureContext();
     const int16 = base64ToInt16(base64Data);
