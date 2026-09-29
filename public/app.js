@@ -226,14 +226,17 @@ function resetTranscript() {
   el('empty-prompt').classList.remove('hidden');
 }
 
+// Server error codes whose wording the app owns.
+const TAKEN_OVER_MESSAGE = 'Parley is open in another window, so this conversation was closed here.';
+const ERROR_TEXT = {
+  busy: 'Parley is busy right now — try again in a minute.',
+  replaced: TAKEN_OVER_MESSAGE,
+};
+
 function showError(message) {
+  if (!message) return;
   el('error-message').textContent = message;
   el('error-card').classList.remove('hidden');
-}
-
-function showStartError(err) {
-  const message = micErrorMessage(err);
-  if (message) showError(message);
 }
 
 function hideError() {
@@ -479,7 +482,7 @@ liveClient.addEventListener('message', (event) => {
       showError('This session will end soon — feel free to wrap up.');
       break;
     case 'error':
-      showError(msg.code === 'busy' ? 'Parley is busy right now — try again in a minute.' : (msg.message || 'Something went wrong.'));
+      showError(ERROR_TEXT[msg.code] || msg.message || 'Something went wrong.');
       break;
     default:
       break;
@@ -518,7 +521,6 @@ liveClient.addEventListener('close', () => {
 // the same rule per device id; this makes the older window let go at once
 // and say why.
 
-const TAKEN_OVER_MESSAGE = 'Parley is open in another window, so this conversation was closed here.';
 const conversationChannel = 'BroadcastChannel' in window ? new BroadcastChannel('parley-conversation') : null;
 
 function claimConversation() {
@@ -567,7 +569,7 @@ el('mic-btn').addEventListener('click', async () => {
     }
     updateMicUI();
   } catch (err) {
-    showStartError(err);
+    showError(micErrorMessage(err));
   } finally {
     micToggleBusy = false;
   }
@@ -637,7 +639,7 @@ el('type-form').addEventListener('submit', async (e) => {
     await ensureSession();
     liveClient.sendText(text);
   } catch (err) {
-    showStartError(err);
+    showError(micErrorMessage(err));
   }
 });
 

@@ -1,11 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { MAX_RECONNECTS, RECONNECT_BASE_MS, SETUP_TIMEOUT_MS, TURN_WATCHDOG_MS } from './live.js';
+import { IDLE_TIMEOUT_MS, MAX_RECONNECTS, RECONNECT_BASE_MS, SETUP_TIMEOUT_MS, TURN_WATCHDOG_MS } from './live.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = path.join(ROOT, '.env');
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface ParleyConfig {
   googleApiKey: string;

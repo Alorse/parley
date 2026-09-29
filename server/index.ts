@@ -203,14 +203,17 @@ wss.on('connection', (ws) => {
     if (ws.readyState === ws.OPEN) ws.close(1011, reason);
   };
 
+  // Tells the client why the server is ending the conversation, then ends it.
+  const closeWithError = (code: string, message: string) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'error', message, code }));
+    endConnection(code);
+  };
+
   // A newer conversation on the same device took over: say so, then end
   // this one so its mic and speaker stop too.
   const replaced = () => {
     log('replaced');
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Parley is open in another window, so this conversation was closed here.', code: 'replaced' }));
-    }
-    endConnection('replaced');
+    closeWithError('replaced', 'Parley is open in another window, so this conversation was closed here.');
   };
 
   // Closes a conversation nobody is taking part in any more (#20): the tab
@@ -229,10 +232,7 @@ wss.on('connection', (ws) => {
       return;
     }
     log('idle', { idleMs: Date.now() - lastActivityAt });
-    if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: 'error', message: 'The conversation was closed after a few quiet minutes. Tap the microphone to start again.', code: 'idle' }));
-    }
-    endConnection('idle');
+    closeWithError('idle', 'The conversation was closed after a few quiet minutes. Tap the microphone to start again.');
   };
   if (config.liveIdleTimeoutMs > 0) idleTimer = setTimeout(checkIdle, config.liveIdleTimeoutMs);
 
@@ -359,8 +359,7 @@ wss.on('connection', (ws) => {
 
       if (!session && ws.readyState === ws.OPEN) {
         log('start-failed-all', { error: lastError ? errorMessage(lastError) : null });
-        ws.send(JSON.stringify({ type: 'error', message: 'Could not reach the tutor right now. Tap the microphone to try again.' }));
-        endConnection('start-failed');
+        closeWithError('start-failed', 'Could not reach the tutor right now. Tap the microphone to try again.');
       }
       return;
     }
