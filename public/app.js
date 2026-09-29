@@ -139,29 +139,26 @@ const audioPlayer = new AudioPlayer();
 const liveClient = new LiveClient();
 const announcer = new Announcer(el('sr-transcript'));
 
+orb.setLevelSource(() => {
+  if (state.uiState === 'listening' && state.micOn) return audioCapture.getLevel();
+  if (state.uiState === 'speaking') return audioPlayer.getLevel();
+  return 0;
+});
 orb.start();
-micWaveform.start(() => (state.micOn ? audioCapture.getWaveformData() : null));
 
-function levelLoop() {
-  if (state.uiState === 'listening' && state.micOn) {
-    orb.setLevel(audioCapture.getLevel());
-  } else if (state.uiState === 'speaking') {
-    orb.setLevel(audioPlayer.getLevel());
-  } else {
-    orb.setLevel(0);
-  }
-  requestAnimationFrame(levelLoop);
-}
-requestAnimationFrame(levelLoop);
-
+// The mic line is only drawn while it is shown (#22).
 function updateWaveformVisibility() {
-  el('waveform-canvas').classList.toggle('hidden', !(state.uiState === 'listening' && state.micOn));
+  const shown = state.uiState === 'listening' && state.micOn;
+  el('waveform-canvas').classList.toggle('hidden', !shown);
+  if (shown) micWaveform.start(() => audioCapture.getWaveformData());
+  else micWaveform.stop();
 }
 
 // --- screen routing ----------------------------------------------------
 
 function showScreen(name) {
   state.screen = name;
+  orb.setVisible(name === 'talk');
   for (const screen of document.querySelectorAll('.screen')) {
     screen.classList.toggle('hidden', /** @type {HTMLElement} */ (screen).dataset.screen !== name);
   }
@@ -889,7 +886,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=11').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=12').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });
