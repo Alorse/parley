@@ -1,30 +1,18 @@
-// App shell weight as it crosses the wire: every asset the page and its
-// service worker load, fetched the way a browser asks for it (accepting
-// br/gzip). Uses node:http rather than fetch, which silently decodes the
-// body and would report the uncompressed size.
+// App shell weight as it crosses the wire: every asset the page links and
+// every code file in the service worker's shell, fetched the way a browser
+// asks for it (accepting br/gzip), counting the bytes actually sent.
 
-import http from 'node:http';
-
-const CODE = ['/app.js', '/orb.js', '/data.js', '/icons.js', '/announcer.js', '/live-client.js', '/audio-capture.js', '/audio-player.js', '/pcm-worklet.js', '/sw.js'];
-
-/** @returns {Promise<{status: number, headers: http.IncomingHttpHeaders, body: Buffer}>} */
-export function getRaw(url, headers = {}) {
-  return new Promise((resolve, reject) => {
-    http
-      .get(url, { headers }, (res) => {
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
-      })
-      .on('error', reject);
-  });
-}
+import { getRaw } from '../test/harness/http.mjs';
 
 export async function shellWeight(base, acceptEncoding = 'gzip, deflate, br') {
   const html = (await getRaw(base + '/')).body.toString();
   const assets = ['/'];
   for (const m of html.matchAll(/(?:href|src)="(\/[^"?#]+)[^"]*"/g)) assets.push(m[1]);
-  assets.push(...CODE);
+  // The code modules the page imports, as the service worker lists them.
+  const sw = (await getRaw(base + '/sw.js')).body.toString();
+  const shell = sw.slice(sw.indexOf('APP_SHELL'), sw.indexOf('];'));
+  for (const m of shell.matchAll(/'(\/[^']+\.js)'/g)) assets.push(m[1]);
+  assets.push('/sw.js');
   const rows = {};
   let total = 0;
   let encoded = 0;

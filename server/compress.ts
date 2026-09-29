@@ -7,7 +7,7 @@ const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.webmanifest', '
 // Below this, the encoding overhead is about what it saves.
 const MIN_BYTES = 1024;
 
-export type Encoding = 'br' | 'gzip';
+type Encoding = 'br' | 'gzip';
 
 const brotli = promisify(zlib.brotliCompress);
 const gzip = promisify(zlib.gzip);

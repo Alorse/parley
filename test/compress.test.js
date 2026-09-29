@@ -4,12 +4,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import http from 'node:http';
 import zlib from 'node:zlib';
 import { compressed, etagMatches, negotiateEncoding, worthCompressing } from '../server/compress.js';
 import { startFakeGemini } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
-import { getRaw } from '../scripts/shell-weight.mjs';
+import { getRaw } from './harness/http.mjs';
 
 test('brotli is preferred, gzip is the fallback, identity when neither is accepted', () => {
   assert.equal(negotiateEncoding('gzip, deflate, br, zstd'), 'br');
@@ -104,16 +103,8 @@ test('fonts and images are sent as they are', async () => {
 });
 
 test('HEAD reports the compressed length without a body', async () => {
-  const head = await new Promise((resolve, reject) => {
-    const req = http.request(`${srv.url}/app.js`, { method: 'HEAD', headers: { 'accept-encoding': 'br' } }, (res) => {
-      let bytes = 0;
-      res.on('data', (c) => (bytes += c.length));
-      res.on('end', () => resolve({ headers: res.headers, bytes }));
-    });
-    req.on('error', reject);
-    req.end();
-  });
-  assert.equal(head.bytes, 0);
+  const head = await getRaw(`${srv.url}/app.js`, { 'accept-encoding': 'br' }, 'HEAD');
+  assert.equal(head.body.length, 0);
   assert.equal(head.headers['content-encoding'], 'br');
   assert.ok(Number(head.headers['content-length']) < appJs.length / 2);
 });
