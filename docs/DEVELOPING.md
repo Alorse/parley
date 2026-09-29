@@ -9,9 +9,17 @@ Browser (PWA, no build step)          Node server (ESM, only dependency: ws)
   getUserMedia -> AudioWorklet          holds the API key
   -> PCM16 16 kHz mono                  builds the tutor persona
   <-> WebSocket /live  (JSON control     proxies one upstream Live session per
-      frames + base64 PCM audio)         browser connection
+      frames + binary PCM audio)         browser connection
                                         /api/review  /api/translate  /api/hint
 ```
+
+On `/live`, audio travels as **binary** WebSocket frames of raw PCM16 mono
+(16 kHz from the mic, 24 kHz from the tutor) and everything else as JSON text
+frames; the server converts to and from the base64-in-JSON the Live API
+wants. The app says `binary: true` in its `start`. A client that doesn't (a
+stale cached app from before binary frames) still works: the server takes
+its `{type:"audio", data:<base64>}` frames and answers in the same form. The
+codec is `parseClientFrame` / `encodeServerMessage` in `server/protocol.ts`.
 
 The browser never talks to Google directly. The server owns the key, renders
 the tutor prompt, applies the half-duplex microphone gate, and turns each
@@ -159,10 +167,12 @@ npm test                                   # includes test/live-harness.test.js:
 
 node scripts/repro-browser.mjs [scenario ...]   # headless Chrome + fake mic
             # + real server + fake upstream; instruments playback buffers,
-            # sockets, mic streams. Scenarios: double-tap, server-restart,
+            # sockets, mic streams. Scenarios: audio-wire (/live KB/s each
+            # way, playback overlaps/underruns), double-tap, server-restart,
             # end-restart, echo-window, echo-bluetooth, screen-reader,
-            # upstream-drop-twice, two-tabs, idle-cpu, sw-offline
-node scripts/perf-server.mjs               # server CPU/RSS per live session (offline)
+            # upstream-drop-twice, upstream-lost, two-tabs, idle-cpu, sw-offline
+node scripts/perf-server.mjs               # server CPU/RSS and /live KB/s per live
+            # session (offline; --audio json for a pre-binary client)
 node scripts/perf-server.mjs --shell       # app shell bytes on the wire (offline)
 
 # These three spend real quota — keep runs small:

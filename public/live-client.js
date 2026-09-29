@@ -2,6 +2,10 @@
 // 'message' CustomEvent (detail = the parsed server message) and a 'close'
 // event when the current socket is closed from the other side (not after
 // stop()); app.js does all of the interpretation.
+//
+// Audio goes both ways as binary frames of raw PCM16 (#24); `binary: true`
+// in the start tells the server this client takes them. A binary frame from
+// the server is handed on as { type: 'audio', data: ArrayBuffer }.
 export class LiveClient extends EventTarget {
   constructor() {
     super();
@@ -12,10 +16,11 @@ export class LiveClient extends EventTarget {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/live`);
+      ws.binaryType = 'arraybuffer';
       this.ws = ws;
 
       const onOpen = () => {
-        this.send({ type: 'start', scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote, clientId });
+        this.send({ type: 'start', scenario, level, voice, halfDuplex, feedbackDetail, name, memoryNote, clientId, binary: true });
         resolve();
       };
       const onError = () => {
@@ -32,10 +37,14 @@ export class LiveClient extends EventTarget {
       ws.addEventListener('error', onError);
       ws.addEventListener('message', (event) => {
         let msg;
-        try {
-          msg = JSON.parse(event.data);
-        } catch {
-          return;
+        if (event.data instanceof ArrayBuffer) {
+          msg = { type: 'audio', data: event.data };
+        } else {
+          try {
+            msg = JSON.parse(event.data);
+          } catch {
+            return;
+          }
         }
         this.dispatchEvent(new CustomEvent('message', { detail: msg }));
       });
@@ -53,8 +62,9 @@ export class LiveClient extends EventTarget {
     }
   }
 
-  sendAudio(base64) {
-    this.send({ type: 'audio', data: base64 });
+  /** @param {ArrayBuffer} pcm one mic chunk, PCM16 16 kHz mono */
+  sendAudio(pcm) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(pcm);
   }
 
   sendText(text) {

@@ -190,9 +190,10 @@ function micHoldMs() {
   return state.sessionHalfDuplex ? audioPlayer.msUntilHeard(ECHO_TAIL_MS) : 0;
 }
 
-function sendMicChunk(base64) {
+/** @param {ArrayBuffer} pcm */
+function sendMicChunk(pcm) {
   if (micHoldMs() > 0) return;
-  liveClient.sendAudio(base64);
+  liveClient.sendAudio(pcm);
 }
 
 let listeningTimer = 0;
@@ -887,7 +888,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=12').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=13').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

@@ -5,13 +5,6 @@
 const SOURCE_SAMPLE_RATE = 24000;
 const LOOKAHEAD_SECONDS = 0.12;
 
-function base64ToInt16(base64) {
-  const raw = atob(base64);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  return new Int16Array(bytes.buffer);
-}
-
 function resampleFloat(input, fromRate, toRate) {
   if (fromRate === toRate) return input;
   const ratio = fromRate / toRate;
@@ -81,9 +74,10 @@ export class AudioPlayer {
     return Math.max(0, (this.nextStartTime + latency - this.ctx.currentTime) * 1000 + tailMs);
   }
 
-  async enqueuePcm16(base64Data) {
+  /** @param {ArrayBuffer} pcm one binary audio frame from the server (#24) */
+  async enqueuePcm16(pcm) {
     await this.ensureContext();
-    const int16 = base64ToInt16(base64Data);
+    const int16 = new Int16Array(pcm, 0, pcm.byteLength >> 1);
     let floatData = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) floatData[i] = int16[i] / 32768;
 
