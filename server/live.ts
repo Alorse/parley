@@ -258,6 +258,12 @@ export class SilenceNudge {
     return this._armedAt !== null;
   }
 
+  // How long until shouldFire() turns true; null once disarmed or fired.
+  msUntilDue(): number | null {
+    if (this._armedAt === null || this._fired) return null;
+    return Math.max(0, this.delayMs - (this._now() - this._armedAt));
+  }
+
   // True the first time delayMs has elapsed since arm(); false before that,
   // once disarmed, and on every call after it has already fired once — so a
   // caller can safely re-check without ever firing twice for the same arm.
@@ -690,12 +696,21 @@ export class GeminiLiveSession extends EventEmitter {
   // which is already silent (no review, no score history pollution).
   armSilenceNudge(): void {
     this.nudge.arm();
+    this._scheduleNudge(this.nudge.delayMs);
+  }
+
+  // A timer can fire a millisecond before Date.now() says the delay has
+  // passed; re-check then instead of silently never nudging.
+  private _scheduleNudge(ms: number): void {
     clearTimeout(this._nudgeTimer);
     this._nudgeTimer = setTimeout(() => {
       if (this.nudge.shouldFire()) {
         this.say(SILENCE_NUDGE_TEXT);
+        return;
       }
-    }, this.nudge.delayMs);
+      const left = this.nudge.msUntilDue();
+      if (left !== null) this._scheduleNudge(Math.max(1, left));
+    }, ms);
   }
 
   private _disarmSilenceNudge(): void {
