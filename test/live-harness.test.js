@@ -513,7 +513,7 @@ test('#21 a session writes lifecycle records (open, ready, upstream drop, end) a
 
 // --- UX: the 'thinking' state ------------------------------------------------
 
-test("the client sees a 'thinking' state between the learner's turn and the tutor's answer", { todo: "the thinking timer is re-armed by every mic frame, so it never fires while the mic streams" }, async () => {
+test("#30 the client sees a 'thinking' state between the learner's turn and the tutor's answer", async () => {
   resetFake({ firstAudioDelayMs: 900, replySeconds: 0.32 });
   const { ws, events } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));

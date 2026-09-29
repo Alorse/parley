@@ -37,6 +37,8 @@ const UPSTREAM_BASE =
 // (#27): it covers the trip to the phone, the player's 120 ms look-ahead,
 // the device's output latency (Bluetooth: ~250 ms) and the room's echo.
 export const TAIL_GUARD_MS = 600;
+// 'thinking' shows once the learner's words have stopped arriving for this
+// long (#30). Mic frames can't tell: an open mic streams silence too.
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
 // An app note, not a learner turn: sent bare, the tutor took the nudge as
@@ -401,6 +403,8 @@ export class GeminiLiveSession extends EventEmitter {
   // tracks whether we've told the client we're in the 'speaking' state
   // for the turn currently in flight.
   private _speakingUi: boolean;
+  // Whether the client was told 'thinking' for the turn in flight.
+  private _thinkingUi: boolean;
   // Compliance metrics only — see containsSpokenScore/containsStackedTurn.
   // Never read back to gate or alter behaviour mid-stream.
   private _spokenScoreViolations: number;
@@ -462,6 +466,7 @@ export class GeminiLiveSession extends EventEmitter {
     this._watchdogTimer = undefined;
     this._upstreamReady = false;
     this._speakingUi = false;
+    this._thinkingUi = false;
     this._spokenScoreViolations = 0;
     this._stackedTurnViolations = 0;
   }
@@ -675,6 +680,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private _clearTimers(): void {
+    this._thinkingUi = false;
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._resumeTimer);
     clearTimeout(this._nudgeTimer);
@@ -685,23 +691,31 @@ export class GeminiLiveSession extends EventEmitter {
     this._watchdogTimer = undefined;
   }
 
-  private _armThinkingTimer(): void {
+  // The learner said or typed something: once nothing more arrives for a
+  // moment, show 'thinking' until the reply starts. More words mean they are
+  // still talking; no reply at all (a sound the model let pass) hands the
+  // turn back.
+  private _armThinkingTimer(delayMs: number = THINKING_DELAY_MS): void {
     clearTimeout(this._thinkingTimer);
+    if (this._speakingUi) return;
+    if (this._thinkingUi) this._setThinking(false);
     this._thinkingTimer = setTimeout(() => {
-      this._emitClient({ type: 'state', value: 'thinking' });
-    }, THINKING_DELAY_MS);
+      this._setThinking(true);
+      this._thinkingTimer = setTimeout(() => this._setThinking(false), this.turnWatchdogMs);
+    }, delayMs);
+  }
+
+  private _setThinking(thinking: boolean): void {
+    this._thinkingUi = thinking;
+    this._emitClient({ type: 'state', value: thinking ? 'thinking' : 'listening' });
   }
 
   sendAudio(base64Data: string): boolean {
-    // Deliberately does not disarm the silence nudge: the client streams mic
-    // frames continuously and unconditionally, silence included (that's the
-    // whole reason HalfDuplexGate exists — the server is what drops frames
-    // while gated). A raw frame proves nothing; only actual transcribed
-    // speech (see the inputTranscription branch below) means the learner
-    // spoke.
-    if (this.gate.isGated() || !this._sendUpstream(audioUpstreamFrame(base64Data))) return false;
-    this._armThinkingTimer();
-    return true;
+    // Deliberately neither disarms the silence nudge nor arms 'thinking':
+    // the client streams mic frames whenever the mic is open, silence
+    // included. A raw frame proves nothing; only actual transcribed speech
+    // (see the inputTranscription branch below) means the learner spoke.
+    return !this.gate.isGated() && this._sendUpstream(audioUpstreamFrame(base64Data));
   }
 
   // Typed text is never transcribed, so it is what the learner said this
@@ -712,6 +726,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.turn.userText = text;
     this.turn.typed = true;
     this._sendTurn(text);
+    this._armThinkingTimer(0);
   }
 
   // A turn the tutor answers that is not reviewed or counted as a learner
@@ -812,6 +827,7 @@ export class GeminiLiveSession extends EventEmitter {
     }
     if (gotAudio) {
       clearTimeout(this._thinkingTimer);
+      this._thinkingUi = false;
       if (!this._speakingUi) {
         this._speakingUi = true;
         this._emitClient({ type: 'state', value: 'speaking' });
@@ -822,6 +838,7 @@ export class GeminiLiveSession extends EventEmitter {
 
     if (sc.inputTranscription?.text) {
       this._disarmSilenceNudge();
+      this._armThinkingTimer();
       this.turn.userText += sc.inputTranscription.text;
       this._emitClient({ type: 'input-text', text: this.turn.userText, final: false });
     }
@@ -839,6 +856,7 @@ export class GeminiLiveSession extends EventEmitter {
     const { userText, assistantText, typed, startedAt, silent, playbackEndsAt } = this.turn;
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
+    this._thinkingUi = false;
     clearTimeout(this._watchdogTimer);
     this._speakingUi = false;
 

@@ -165,6 +165,66 @@ test('#27 a turn heard only as a murmur, a letter or nothing is not reviewed or 
   session.stop();
 });
 
+// --- #30: the 'thinking' state ----------------------------------------------
+
+const statesOf = (events) => events.filter((e) => e.type === 'state').map((e) => e.value);
+
+async function pastGreeting(options) {
+  const started = await startSession(options);
+  started.ws.emitServerMessage(audioChunkMessage());
+  started.ws.emitServerMessage(turnCompleteMessage());
+  await delay(PAST_TAIL_GUARD);
+  started.clientEvents.length = 0;
+  return started;
+}
+
+test("#30 'thinking' shows once the learner's words stop, however long the mic keeps streaming", async () => {
+  const { session, ws, clientEvents } = await pastGreeting();
+  const iv = setInterval(() => session.sendAudio('c2lsZW5jZQ=='), 30);
+  try {
+    await delay(700);
+    assert.deepEqual(statesOf(clientEvents), [], 'mic frames alone never mean the learner finished a turn');
+    ws.emitServerMessage(inputTranscriptionMessage('I went to'));
+    await delay(300);
+    ws.emitServerMessage(inputTranscriptionMessage(' the beach'));
+    await delay(300);
+    assert.deepEqual(statesOf(clientEvents), [], 'not while words are still arriving');
+    await delay(300);
+    assert.deepEqual(statesOf(clientEvents), ['thinking']);
+    ws.emitServerMessage(audioChunkMessage());
+    assert.deepEqual(statesOf(clientEvents), ['thinking', 'speaking']);
+  } finally {
+    clearInterval(iv);
+    session.stop();
+  }
+});
+
+test("#30 more words after 'thinking' hand the turn back to the learner", async () => {
+  const { session, ws, clientEvents } = await pastGreeting();
+  ws.emitServerMessage(inputTranscriptionMessage('Well'));
+  await delay(600);
+  ws.emitServerMessage(inputTranscriptionMessage(' I think so'));
+  await delay(600);
+  assert.deepEqual(statesOf(clientEvents), ['thinking', 'listening', 'thinking']);
+  session.stop();
+});
+
+test("#30 'thinking' with no reply at all goes back to listening", async () => {
+  const { session, ws, clientEvents } = await pastGreeting({ turnWatchdogMs: 200 });
+  ws.emitServerMessage(inputTranscriptionMessage('Mhm'));
+  await delay(900);
+  assert.deepEqual(statesOf(clientEvents), ['thinking', 'listening']);
+  session.stop();
+});
+
+test("#30 a typed message shows 'thinking' at once", async () => {
+  const { session, clientEvents } = await pastGreeting();
+  session.sendText('Hello there');
+  await delay(20);
+  assert.deepEqual(statesOf(clientEvents), ['thinking']);
+  session.stop();
+});
+
 // --- learner name flows into the review request ----------------------------
 
 test('a completed turn\'s review-request payload carries the session\'s learnerName', async () => {
