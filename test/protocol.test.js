@@ -91,6 +91,27 @@ test('HalfDuplexGate: mic stays gated during the tail guard, then resumes', () =
   assert.equal(gate.isGated(), false, 'gate opens after the tail guard elapses');
 });
 
+test('HalfDuplexGate: #27 the tail guard counts from when the reply finishes playing, not from turnComplete', () => {
+  let now = 1000;
+  const gate = new HalfDuplexGate({ enabled: true, tailGuardMs: 600, now: () => now });
+  gate.onAssistantAudio();
+  // A burst-sent reply: turnComplete arrives with 2 s of audio still to play.
+  gate.onTurnComplete(now + 2000);
+  assert.equal(gate.msUntilOpen(), 2600);
+  now += 2500;
+  assert.equal(gate.isGated(), true, 'still gated 500 ms after playback ended');
+  now += 150;
+  assert.equal(gate.isGated(), false);
+  assert.equal(gate.msUntilOpen(), 0);
+});
+
+test('HalfDuplexGate: #27 a playback end already in the past falls back to the tail guard from now', () => {
+  let now = 5000;
+  const gate = new HalfDuplexGate({ enabled: true, tailGuardMs: 600, now: () => now });
+  gate.onTurnComplete(now - 1000);
+  assert.equal(gate.msUntilOpen(), 600);
+});
+
 test('HalfDuplexGate: interruption opens the gate immediately', () => {
   const gate = new HalfDuplexGate({ enabled: true, tailGuardMs: 400 });
   gate.onAssistantAudio();

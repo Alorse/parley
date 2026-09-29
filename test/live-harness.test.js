@@ -526,6 +526,47 @@ test("the client sees a 'thinking' state between the learner's turn and the tuto
   assert.ok(events.some((e) => e.type === 'state' && e.value === 'thinking'));
 });
 
+// --- #27: Parley hearing its own voice ----------------------------------------
+
+// A phone whose speaker leaks into its mic: plays each audio chunk the way
+// public/audio-player.js schedules it (120 ms look-ahead, back to back),
+// heard `outputLatencyMs` later (a Bluetooth speaker: ~250 ms) and, while
+// that playback plus a short room tail lasts, streams loud frames; silence
+// otherwise. Returns how many learner turns Gemini heard.
+async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 250, tailMs = 150 } = {}) {
+  const base = gem.sessions.length;
+  const { ws, events } = await connect();
+  let playsUntil = 0;
+  ws.on('message', (raw) => {
+    const m = JSON.parse(raw.toString());
+    if (m.type !== 'audio') return;
+    const playMs = (Buffer.from(m.data, 'base64').length / 48000) * 1000;
+    playsUntil = Math.max(playsUntil, Date.now() + lookaheadMs + outputLatencyMs) + playMs;
+  });
+  ws.send(JSON.stringify({ type: 'start' }));
+  const quiet = Buffer.alloc(1024).toString('base64');
+  const iv = setInterval(() => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'audio', data: Date.now() < playsUntil + tailMs ? LOUD_FRAME : quiet }));
+  }, 32);
+  await delay(ms);
+  clearInterval(iv);
+  ws.close();
+  const [s] = newSessions(base);
+  return { phantomTurns: s.replies - 1, events };
+}
+
+test('#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (streamed reply)', async () => {
+  resetFake({ replySeconds: 0.64 });
+  const { phantomTurns } = await echoingClient();
+  assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
+});
+
+test('#27 the tail of Parley’s own voice never reaches Gemini as a learner turn (burst reply, like gemini-3.8-live)', async () => {
+  resetFake({ replySeconds: 0.64, burst: true });
+  const { phantomTurns } = await echoingClient();
+  assert.equal(phantomTurns, 0, `${phantomTurns} replies to Parley's own echo`);
+});
+
 // --- #14: hearing and honesty ------------------------------------------------
 
 class TextOnlyUpstream extends EventTarget {

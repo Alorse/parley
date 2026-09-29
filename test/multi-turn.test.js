@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { GeminiLiveSession, SilenceNudge } from '../server/live.js';
+import { GeminiLiveSession, SilenceNudge, TAIL_GUARD_MS } from '../server/live.js';
 import { APP_NOTE_PREFIX } from '../server/tutor.js';
 import { waitFor } from './harness/wait.mjs';
+
+const PAST_TAIL_GUARD = TAIL_GUARD_MS + 50;
 
 // A minimal stand-in for the upstream WebSocket, driven manually so a test
 // can script exactly what "Gemini" sends back without any network. Mirrors
@@ -85,7 +87,7 @@ test('a live session accepts a second and third user turn after the tutor finish
   const turnCompleteEventsAfterGreeting = clientEvents.filter((e) => e.type === 'turn-complete').length;
   assert.equal(turnCompleteEventsAfterGreeting, 0, 'the greeting turn is silent, no turn-complete for it');
 
-  await delay(450); // past the 400ms tail guard
+  await delay(PAST_TAIL_GUARD); // past the tail guard
   assert.equal(session.sendAudio('turn-1-audio'), true, 'mic re-opens after the greeting finishes');
 
   // --- user turn 1 ------------------------------------------------------
@@ -93,20 +95,20 @@ test('a live session accepts a second and third user turn after the tutor finish
   ws.emitServerMessage(turnCompleteMessage());
   assert.equal(session.sendAudio('gated-during-turn-1-reply'), false, 'gated again while turn 1 wraps up');
 
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
   assert.equal(session.sendAudio('turn-2-audio'), true, 'mic re-opens after turn 1 finishes');
 
   // --- user turn 2 --------------------------------------------------------
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
 
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
   assert.equal(session.sendAudio('turn-3-audio'), true, 'mic re-opens after turn 2 finishes, ready for a third turn');
 
   // --- user turn 3 --------------------------------------------------------
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage());
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
   assert.equal(session.sendAudio('turn-4-audio'), true, 'mic re-opens yet again after turn 3 — the gate never gets stuck');
 
   const turnCompleteEvents = clientEvents.filter((e) => e.type === 'turn-complete');
@@ -123,7 +125,7 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   let acceptedTurns = 0;
   for (let i = 0; i < 6; i++) {
@@ -131,7 +133,7 @@ test('a live session keeps accepting turns indefinitely, not just the first one 
     if (opened) acceptedTurns += 1;
     ws.emitServerMessage(audioChunkMessage());
     ws.emitServerMessage(turnCompleteMessage());
-    await delay(450);
+    await delay(PAST_TAIL_GUARD);
   }
 
   assert.equal(acceptedTurns, 6, 'every one of 6 sequential turns found the mic open after its predecessor finished');
@@ -148,7 +150,7 @@ test('a completed turn\'s review-request payload carries the session\'s learnerN
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   ws.emitServerMessage(inputTranscriptionMessage("I'm Kenji"));
   ws.emitServerMessage(audioChunkMessage());
@@ -167,7 +169,7 @@ test('setLearnerName updates the name carried by every later review-request, onc
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting, silent
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   // Turn 1: the learner introduces themselves — index.ts's review-request
   // handler would call setLearnerName once review.ts reports the captured
@@ -177,7 +179,7 @@ test('setLearnerName updates the name carried by every later review-request, onc
   ws.emitServerMessage(turnCompleteMessage());
   assert.equal(reviewRequests[0].learnerName, '', 'not known yet for this first turn');
   session.setLearnerName('Priya');
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   // Turn 2: the session must now report the name on every later turn,
   // without needing a fresh 'start' handshake.
@@ -200,7 +202,7 @@ test('a completed turn\'s review-request payload carries the session\'s scenario
 
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting, silent, no review-request
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   ws.emitServerMessage(inputTranscriptionMessage('Goodbye, thanks for the meal!'));
   ws.emitServerMessage(audioChunkMessage());
@@ -248,7 +250,7 @@ test('armSilenceNudge speaks the nudge via say() if the learner stays silent', a
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   const sentBeforeNudge = ws.sent.length;
   session.nudge.delayMs = 30; // short delay so the test doesn't wait 6s
@@ -270,7 +272,7 @@ test('armSilenceNudge is NOT disarmed by a raw sendAudio frame — the client st
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   const sentBeforeNudge = ws.sent.length;
   session.nudge.delayMs = 30;
@@ -289,7 +291,7 @@ test('armSilenceNudge is disarmed once the learner\'s speech is actually transcr
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   const sentBeforeNudge = ws.sent.length;
   session.nudge.delayMs = 30;
@@ -310,7 +312,7 @@ test('armSilenceNudge fires at most once even if re-armed after already firing',
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   session.nudge.delayMs = 30;
   const before = ws.sent.length;
@@ -331,7 +333,7 @@ test('a nudge timer that fires a moment early re-checks instead of never nudging
   const { session, ws } = await startSession();
   ws.emitServerMessage(audioChunkMessage());
   ws.emitServerMessage(turnCompleteMessage()); // greeting
-  await delay(450);
+  await delay(PAST_TAIL_GUARD);
 
   // The clock falls 5 ms behind the timers right after arming, so the
   // timer's first check finds the nudge not yet due.

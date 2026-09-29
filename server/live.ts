@@ -32,7 +32,11 @@ export function resolveWebSocketImpl(): any {
 const UPSTREAM_BASE =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
-const TAIL_GUARD_MS = 400;
+// How long the mic stays closed after Parley's reply has finished playing,
+// counted from when its audio would end in real time, not from turnComplete
+// (#27): it covers the trip to the phone, the player's 120 ms look-ahead,
+// the device's output latency (Bluetooth: ~250 ms) and the room's echo.
+export const TAIL_GUARD_MS = 600;
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
 // An app note, not a learner turn: sent bare, the tutor took the nudge as
@@ -175,8 +179,8 @@ export interface HalfDuplexGateOptions {
 }
 
 // Pure, timestamp-based half-duplex gate: while the assistant's audio is
-// playing, and for a short tail guard after it ends, incoming mic frames are
-// dropped server-side. Timestamp-based (not setTimeout-based) so it is
+// playing, and for a tail guard after its playback ends, incoming mic frames
+// are dropped server-side. Timestamp-based (not setTimeout-based) so it is
 // trivially unit-testable with a fake clock.
 export class HalfDuplexGate {
   tailGuardMs: number;
@@ -208,9 +212,11 @@ export class HalfDuplexGate {
     this.onAssistantAudio();
   }
 
-  onTurnComplete(): void {
+  // `playbackEndsAt`: when the reply's audio finishes playing in real time,
+  // which for a reply sent in a burst is well after turnComplete.
+  onTurnComplete(playbackEndsAt = 0): void {
     this._speaking = false;
-    this._resumeAt = this._now() + this.tailGuardMs;
+    this._resumeAt = Math.max(this._now(), playbackEndsAt) + this.tailGuardMs;
   }
 
   onInterrupted(): void {
@@ -222,6 +228,11 @@ export class HalfDuplexGate {
     if (!this.enabled) return false;
     if (this._speaking) return true;
     return this._now() < this._resumeAt;
+  }
+
+  // How long until the mic opens again; 0 once it is open.
+  msUntilOpen(): number {
+    return Math.max(0, this._resumeAt - this._now());
   }
 }
 
@@ -794,7 +805,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private _onTurnComplete(): void {
-    const { userText, assistantText, startedAt, silent } = this.turn;
+    const { userText, assistantText, startedAt, silent, playbackEndsAt } = this.turn;
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._watchdogTimer);
@@ -829,15 +840,16 @@ export class GeminiLiveSession extends EventEmitter {
     }
 
     this.turn = freshTurn();
-    this._reopenMic();
+    this._reopenMic(playbackEndsAt);
   }
 
-  // Opens the mic gate after the tail guard, and tells the client then.
-  private _reopenMic(): void {
-    this.gate.onTurnComplete();
+  // Opens the mic gate once the reply has played and the tail guard has
+  // passed, and tells the client then.
+  private _reopenMic(playbackEndsAt = 0): void {
+    this.gate.onTurnComplete(playbackEndsAt);
     clearTimeout(this._resumeTimer);
     this._resumeTimer = setTimeout(() => {
       this._emitClient({ type: 'state', value: 'listening' });
-    }, this.gate.tailGuardMs);
+    }, this.gate.msUntilOpen());
   }
 }
