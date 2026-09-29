@@ -515,12 +515,20 @@ function updateEndButtonState() {
   el('end-control').classList.toggle('is-disabled', !state.sessionStarted);
 }
 
+// Taps while the mic is still connecting or opening are ignored: acting on
+// them opened a second mic pipeline next to the first (#18).
+let micToggleBusy = false;
+
 el('mic-btn').addEventListener('click', async () => {
+  if (micToggleBusy) return;
+  micToggleBusy = true;
   try {
     await ensureSession();
+    if (!state.sessionStarted) return;
     if (!state.micOn) {
-      await audioCapture.start((base64) => liveClient.sendAudio(base64));
-      state.micOn = true;
+      // false when the session ended while the mic was opening: teardown
+      // already stopped it, so it stays off.
+      state.micOn = await audioCapture.start((base64) => liveClient.sendAudio(base64));
     } else {
       audioCapture.stop();
       state.micOn = false;
@@ -528,6 +536,8 @@ el('mic-btn').addEventListener('click', async () => {
     updateMicUI();
   } catch (err) {
     showError(micErrorMessage(err));
+  } finally {
+    micToggleBusy = false;
   }
 });
 
@@ -808,7 +818,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=9').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=10').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });
