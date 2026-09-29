@@ -40,6 +40,7 @@ finished turn into a structured review (score, corrections, words).
 | `PARLEY_RECONNECT_BASE_MS` | `500` | first reconnect backoff; doubles per attempt after a drop (max 4 s, 3 attempts per drop) |
 | `PARLEY_SETUP_TIMEOUT_MS` | `15000` | an upstream setup that takes longer fails (next model / next attempt) |
 | `PARLEY_TURN_WATCHDOG_MS` | `10000` | how long past a reply's playback the server waits for `turnComplete` before completing the turn itself |
+| `PARLEY_IDLE_TIMEOUT_MS` | `300000` | a `/live` connection with no learner activity (transcribed speech, typed text, taps; not silent mic frames) for this long is closed with `{code:"idle"}`; `0` disables it |
 
 `.env` is parsed by a ~20-line hand-rolled parser in `server/config.ts` — no
 `dotenv` dependency. It is git-ignored; never commit it.
@@ -67,9 +68,10 @@ journalctl -u parley | grep '"sid":"1a2b3c4d"'        # one conversation
 
 Events: `open`, `busy`, `start`, `upstream-ready` (model, setup time),
 `upstream-error`, `upstream-close` (close code, reason, how long it was up),
-`reconnecting`, `going-away`, `gave-up`, `start-failed`, and `end` (duration,
-learner turns, reconnects, client close code). They carry lifecycle metadata
-only — never speech, transcripts, audio, the API key or resumption handles
+`reconnecting`, `going-away`, `gave-up`, `start-failed`, `replaced` (a newer
+conversation on the same device took over), `idle` (closed after the idle
+limit), and `end` (duration, learner turns, reconnects, client close code).
+They carry lifecycle metadata only — never speech, transcripts, audio, the API key or resumption handles
 (`server/session-log.ts`).
 
 ## Upstream drops
@@ -87,6 +89,12 @@ can't be reached any more (reconnects exhausted, or no model completes setup)
 the server sends an `error`, frees the `MAX_SESSIONS` slot and closes the
 socket; the client turns the mic off and says the conversation ended. A second
 `start` on one socket is rejected with `{code:"already-started"}`.
+
+One conversation per device: the app keeps a random device id in
+localStorage (shared by its tabs and the installed app) and sends it with
+`start`. A newer `start` with the same id ends the older connection with
+`{code:"replaced"}`, and a `BroadcastChannel` makes the older window let go
+at once.
 
 ## Node version
 

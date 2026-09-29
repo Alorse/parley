@@ -292,6 +292,135 @@ test('#13 a second start on the same socket does not open a second upstream sess
   assert.equal(events.find((e) => e.type === 'error')?.code, 'already-started');
 });
 
+// --- #20: sessions nobody is taking part in ----------------------------------
+
+test('#20 a conversation nobody takes part in is closed after the idle limit, and speech keeps it open', async () => {
+  const quiet = await startParley({ upstreamUrl: gem.url, env: { PARLEY_IDLE_TIMEOUT_MS: '3000', MAX_SESSIONS: '50' } });
+  resetFake();
+  const base = gem.sessions.length;
+  const connectTo = async () => {
+    const ws = new WebSocket(quiet.wsUrl);
+    const events = [];
+    ws.on('message', (raw) => events.push({ at: Date.now(), ...JSON.parse(raw.toString()) }));
+    await new Promise((resolve) => ws.once('open', resolve));
+    return { ws, events, closed: new Promise((resolve) => ws.once('close', resolve)) };
+  };
+  try {
+    // A socket that never starts a conversation.
+    const lurker = await connectTo();
+    // A learner who says one thing, then leaves the mic streaming silence.
+    const talker = await connectTo();
+    const startedAt = Date.now();
+    talker.ws.send(JSON.stringify({ type: 'start' }));
+    await waitFor(() => talker.events.some((e) => e.type === 'state' && e.value === 'listening'));
+    const silence = Buffer.alloc(1024).toString('base64');
+    let n = 0;
+    const iv = setInterval(() => {
+      if (talker.ws.readyState === talker.ws.OPEN) talker.ws.send(JSON.stringify({ type: 'audio', data: n++ < 16 ? LOUD_FRAME : silence }));
+    }, 32);
+    try {
+      assert.ok(await waitFor(() => talker.events.some((e) => e.type === 'input-text'), 3000), 'speech was transcribed');
+      const heardAt = talker.events.find((e) => e.type === 'input-text').at;
+      // Past the limit counted from the start, well inside the one counted from the speech.
+      assert.ok(heardAt < startedAt + 2600, 'the speech came too late to tell the two limits apart');
+      await delay(Math.max(heardAt + 1000, startedAt + 3300) - Date.now());
+      assert.equal(talker.ws.readyState, talker.ws.OPEN, 'speech did not count as taking part');
+      assert.equal(lurker.ws.readyState, lurker.ws.CLOSED, 'a socket that never started was left open');
+      assert.equal(lurker.events.find((e) => e.type === 'error')?.code, 'idle');
+
+      const ended = await Promise.race([talker.closed.then(() => true), delay(4000).then(() => false)]);
+      assert.ok(ended, 'a streaming but silent mic kept the conversation open');
+      assert.equal(talker.events.find((e) => e.type === 'error')?.code, 'idle', 'the learner is told why');
+      assert.ok(await waitFor(() => newSessions(base).every((s) => s.closedAt !== null)), 'the upstream session was left open');
+      assert.equal((await (await fetch(`${quiet.url}/api/health`)).json()).activeSessions, 0);
+    } finally {
+      clearInterval(iv);
+    }
+  } finally {
+    await quiet.stop();
+  }
+});
+
+test('#20 typed messages count as taking part', async () => {
+  const quiet = await startParley({ upstreamUrl: gem.url, env: { PARLEY_IDLE_TIMEOUT_MS: '1000' } });
+  resetFake({ replySeconds: 0.1 });
+  try {
+    const ws = new WebSocket(quiet.wsUrl);
+    await new Promise((resolve) => ws.once('open', resolve));
+    ws.send(JSON.stringify({ type: 'start' }));
+    for (let i = 0; i < 5; i++) {
+      await delay(500);
+      ws.send(JSON.stringify({ type: 'text', text: `message ${i}` }));
+    }
+    assert.equal(ws.readyState, ws.OPEN, 'closed as idle while the learner was typing');
+    ws.close();
+  } finally {
+    await quiet.stop();
+  }
+});
+
+// --- #19: one conversation per device ----------------------------------------
+
+test('#19 a newer conversation from the same device takes over, and the older one is told why', async () => {
+  resetFake();
+  const base = gem.sessions.length;
+  const older = await connect();
+  older.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19a' }));
+  await waitFor(() => older.events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const newer = await connect();
+  newer.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19a' }));
+  const olderEnded = await Promise.race([older.closed.then(() => true), delay(2000).then(() => false)]);
+  await waitFor(() => newer.events.some((e) => e.type === 'state' && e.value === 'listening'));
+  try {
+    assert.ok(olderEnded, 'the older conversation kept running');
+    assert.equal(older.events.find((e) => e.type === 'error')?.code, 'replaced');
+    assert.equal(newer.events.filter((e) => e.type === 'error').length, 0);
+    assert.equal(newer.ws.readyState, newer.ws.OPEN);
+    const [first, second] = newSessions(base);
+    assert.ok(await waitFor(() => first.closedAt !== null), "the older conversation's upstream was left open");
+    assert.equal(second.closedAt, null);
+  } finally {
+    newer.ws.close();
+  }
+});
+
+test('#19 a takeover also ends an older conversation that is still being set up', async () => {
+  resetFake({ setupDelayMs: 400 });
+  const base = gem.sessions.length;
+  const older = await connect();
+  older.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19b' }));
+  await delay(100);
+  const newer = await connect();
+  newer.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19b' }));
+  await waitFor(() => newer.events.some((e) => e.type === 'state' && e.value === 'listening'), 4000);
+  await delay(200);
+  try {
+    assert.equal(older.events.find((e) => e.type === 'error')?.code, 'replaced');
+    const open = newSessions(base).filter((s) => s.closedAt === null);
+    assert.equal(open.length, 1, `${open.length} upstream sessions open for one device`);
+  } finally {
+    newer.ws.close();
+  }
+});
+
+test('#19 conversations from different devices do not affect each other', async () => {
+  resetFake();
+  const a = await connect();
+  const b = await connect();
+  a.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19c' }));
+  b.ws.send(JSON.stringify({ type: 'start', clientId: 'device-19d' }));
+  await waitFor(() => [a, b].every((c) => c.events.some((e) => e.type === 'state' && e.value === 'listening')));
+  try {
+    for (const c of [a, b]) {
+      assert.equal(c.events.filter((e) => e.type === 'error').length, 0);
+      assert.equal(c.ws.readyState, c.ws.OPEN);
+    }
+  } finally {
+    a.ws.close();
+    b.ws.close();
+  }
+});
+
 test('#17 the turn watchdog waits for a burst-sent reply to finish playing before stepping in', async () => {
   // gemini-3.8-live sends the audio in a burst and holds turnComplete until
   // playback would end: 3 s of audio here, twice the 1.5 s watchdog.

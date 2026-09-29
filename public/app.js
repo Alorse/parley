@@ -11,6 +11,7 @@ import {
   getProfile,
   setProfileName,
   getMemoryNote,
+  getClientId,
   addConversationMemory,
   buildConversationMemory,
   forgetProfile,
@@ -75,7 +76,10 @@ function applyTextSize(textSize) {
   document.documentElement.style.setProperty('--scale', String(found.scale));
 }
 
+// null for a start that was cancelled on purpose (another window took the
+// conversation over while this one was still connecting): nothing to report.
 function micErrorMessage(err) {
+  if (err && err.name === 'AbortError') return null;
   if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
     return "I couldn't hear you — check the microphone permission.";
   }
@@ -222,7 +226,15 @@ function resetTranscript() {
   el('empty-prompt').classList.remove('hidden');
 }
 
+// Server error codes whose wording the app owns.
+const TAKEN_OVER_MESSAGE = 'Parley is open in another window, so this conversation was closed here.';
+const ERROR_TEXT = {
+  busy: 'Parley is busy right now — try again in a minute.',
+  replaced: TAKEN_OVER_MESSAGE,
+};
+
 function showError(message) {
+  if (!message) return;
   el('error-message').textContent = message;
   el('error-card').classList.remove('hidden');
 }
@@ -376,6 +388,7 @@ async function ensureSession() {
   if (state.sessionStarted) return;
   if (connectPromise) return connectPromise;
   hideError();
+  claimConversation();
   state.conversationCorrections = [];
   state.hadTurn = false;
   connectPromise = liveClient
@@ -387,6 +400,7 @@ async function ensureSession() {
       feedbackDetail: state.settings.feedbackDetail,
       name: state.profile.name,
       memoryNote: getMemoryNote(state.profile),
+      clientId: getClientId(),
     })
     .then(() => {
       state.sessionStarted = true;
@@ -468,7 +482,7 @@ liveClient.addEventListener('message', (event) => {
       showError('This session will end soon — feel free to wrap up.');
       break;
     case 'error':
-      showError(msg.code === 'busy' ? 'Parley is busy right now — try again in a minute.' : (msg.message || 'Something went wrong.'));
+      showError(ERROR_TEXT[msg.code] || msg.message || 'Something went wrong.');
       break;
     default:
       break;
@@ -500,6 +514,26 @@ liveClient.addEventListener('close', () => {
   }
 });
 
+// --- one conversation per device (#19) -----------------------------------
+// Starting a conversation here ends the one in any other Parley window or
+// tab on this device (the installed app included), so two tutors never talk
+// over each other or hear each other through the mic. The server enforces
+// the same rule per device id; this makes the older window let go at once
+// and say why.
+
+const conversationChannel = 'BroadcastChannel' in window ? new BroadcastChannel('parley-conversation') : null;
+
+function claimConversation() {
+  conversationChannel?.postMessage({ type: 'claim' });
+}
+
+conversationChannel?.addEventListener('message', (event) => {
+  if (event.data?.type !== 'claim' || (!state.sessionStarted && !connectPromise)) return;
+  liveClient.stop();
+  if (state.sessionStarted) teardownSession();
+  showError(TAKEN_OVER_MESSAGE);
+});
+
 // --- mic / end / meaning / type / hint controls --------------------------
 
 function updateMicUI() {
@@ -515,12 +549,20 @@ function updateEndButtonState() {
   el('end-control').classList.toggle('is-disabled', !state.sessionStarted);
 }
 
+// Taps while the mic is still connecting or opening are ignored: acting on
+// them opened a second mic pipeline next to the first (#18).
+let micToggleBusy = false;
+
 el('mic-btn').addEventListener('click', async () => {
+  if (micToggleBusy) return;
+  micToggleBusy = true;
   try {
     await ensureSession();
+    if (!state.sessionStarted) return;
     if (!state.micOn) {
-      await audioCapture.start((base64) => liveClient.sendAudio(base64));
-      state.micOn = true;
+      // false when the session ended while the mic was opening: teardown
+      // already stopped it, so it stays off.
+      state.micOn = await audioCapture.start((base64) => liveClient.sendAudio(base64));
     } else {
       audioCapture.stop();
       state.micOn = false;
@@ -528,6 +570,8 @@ el('mic-btn').addEventListener('click', async () => {
     updateMicUI();
   } catch (err) {
     showError(micErrorMessage(err));
+  } finally {
+    micToggleBusy = false;
   }
 });
 
@@ -808,7 +852,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=9').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=10').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { MAX_RECONNECTS, RECONNECT_BASE_MS, SETUP_TIMEOUT_MS, TURN_WATCHDOG_MS } from './live.js';
+import { IDLE_TIMEOUT_MS, MAX_RECONNECTS, RECONNECT_BASE_MS, SETUP_TIMEOUT_MS, TURN_WATCHDOG_MS } from './live.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = path.join(ROOT, '.env');
@@ -25,6 +25,9 @@ export interface ParleyConfig {
   // server waits for its turnComplete before completing the turn itself.
   liveSetupTimeoutMs: number;
   liveTurnWatchdogMs: number;
+  // A conversation with no sign of the learner (speech, typed text, taps)
+  // for this long is closed so it stops using quota; 0 disables it (#20).
+  liveIdleTimeoutMs: number;
   root: string;
 }
 
@@ -105,6 +108,7 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
     liveReconnectBaseMs: parseCount(env.PARLEY_RECONNECT_BASE_MS, RECONNECT_BASE_MS),
     liveSetupTimeoutMs: parseCount(env.PARLEY_SETUP_TIMEOUT_MS, SETUP_TIMEOUT_MS),
     liveTurnWatchdogMs: parseCount(env.PARLEY_TURN_WATCHDOG_MS, TURN_WATCHDOG_MS),
+    liveIdleTimeoutMs: parseCount(env.PARLEY_IDLE_TIMEOUT_MS, IDLE_TIMEOUT_MS),
     root: ROOT,
   };
 }
@@ -128,6 +132,7 @@ function filterProcessEnv(): Record<string, string> {
     'PARLEY_RECONNECT_BASE_MS',
     'PARLEY_SETUP_TIMEOUT_MS',
     'PARLEY_TURN_WATCHDOG_MS',
+    'PARLEY_IDLE_TIMEOUT_MS',
   ];
   const out: Record<string, string> = {};
   for (const key of keys) {

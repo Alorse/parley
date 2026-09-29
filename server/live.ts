@@ -53,6 +53,8 @@ const RECONNECT_ATTEMPTS_PER_DROP = 3;
 // long after its audio would have finished playing, so the mic reopens.
 export const SETUP_TIMEOUT_MS = 15000;
 export const TURN_WATCHDOG_MS = 10000;
+// A conversation with no sign of the learner for this long is closed (#20).
+export const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const OUTPUT_BYTES_PER_MS = (24000 * 2) / 1000;
 
 // Wait before the Nth (1-based) attempt after a drop: base, 2x, 4x... capped.

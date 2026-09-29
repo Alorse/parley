@@ -26,7 +26,7 @@ class MemoryStorage {
 
 globalThis.localStorage = new MemoryStorage();
 
-const { getProfile, setProfileName, addConversationMemory, getMemoryNote, forgetProfile, buildConversationMemory, MEMORY_CAP } = await import(
+const { getProfile, setProfileName, addConversationMemory, getMemoryNote, forgetProfile, buildConversationMemory, MEMORY_CAP, getClientId } = await import(
   '../public/data.js'
 );
 
@@ -89,4 +89,12 @@ test('buildConversationMemory notes the topic and a recurring mistake theme from
 test('buildConversationMemory falls back to just the topic when there were no corrections', () => {
   assert.equal(buildConversationMemory('Just talk', []), 'talked about a free conversation');
   assert.equal(buildConversationMemory('The weekend', []), 'talked about the weekend');
+});
+
+test('#19 getClientId is created once and then shared, so every window on the device sends the same id', () => {
+  localStorage.clear();
+  const id = getClientId();
+  assert.match(id, /^[0-9a-f-]{36}$/);
+  assert.equal(getClientId(), id);
+  assert.ok(localStorage.getItem('parley.device.v1').includes(id), 'the id is persisted for the other windows');
 });

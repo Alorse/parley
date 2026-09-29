@@ -18,6 +18,10 @@ export interface StartMessage {
   // earlier conversation. Never stored server-side: forwarded straight into
   // the persona prompt and otherwise forgotten once the session ends.
   memoryNote?: string;
+  // A random id the app keeps per device (per browser profile), shared by
+  // its tabs and the installed app. A newer conversation with the same id
+  // takes over from the older one (#19).
+  clientId?: string;
 }
 
 export interface AudioMessage {
