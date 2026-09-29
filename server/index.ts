@@ -333,7 +333,6 @@ wss.on('connection', (ws) => {
       reason: endReason,
       clientCode: code,
       durationMs: Date.now() - openedAt,
-      started: Boolean(session),
       model: session?.model,
       turns: session?.turnsCompleted ?? 0,
       reconnects: session?.reconnects ?? 0,

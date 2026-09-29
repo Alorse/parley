@@ -39,15 +39,15 @@ const SILENCE_NUDGE_TEXT = "Take your time — try saying it, or we'll move on."
 // Upstream drops were seen about every 8 minutes, so a long conversation
 // needs several resumes; the cap only stops a flapping upstream from looping
 // forever. Each drop gets a few attempts with exponential backoff.
-const MAX_RECONNECTS = 8;
-const RECONNECT_BASE_MS = 500;
+export const MAX_RECONNECTS = 8;
+export const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 4000;
 const RECONNECT_ATTEMPTS_PER_DROP = 3;
 // No wait is unbounded (#17). A setup that never completes fails the attempt;
 // a reply whose turnComplete never arrives is completed by the server this
 // long after its audio would have finished playing, so the mic reopens.
-const SETUP_TIMEOUT_MS = 15000;
-const TURN_WATCHDOG_MS = 10000;
+export const SETUP_TIMEOUT_MS = 15000;
+export const TURN_WATCHDOG_MS = 10000;
 const OUTPUT_BYTES_PER_MS = (24000 * 2) / 1000;
 
 // Wait before the Nth (1-based) attempt after a drop: base, 2x, 4x... capped.
@@ -448,9 +448,15 @@ export class GeminiLiveSession extends EventEmitter {
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
       this._upstreamReady = false;
-      const setupTimer = setTimeout(() => {
-        if (settled) return;
+      // First outcome wins: setupComplete, error, close or the deadline.
+      const settle = (): boolean => {
+        if (settled) return false;
         settled = true;
+        clearTimeout(setupTimer);
+        return true;
+      };
+      const setupTimer = setTimeout(() => {
+        if (!settle()) return;
         this.log('setup-timeout', { model: this.model, ms: this.setupTimeoutMs });
         reject(new Error('upstream setup timed out'));
         try {
@@ -472,9 +478,7 @@ export class GeminiLiveSession extends EventEmitter {
         } catch {
           return;
         }
-        if (msg.setupComplete && !settled) {
-          settled = true;
-          clearTimeout(setupTimer);
+        if (msg.setupComplete && settle()) {
           setupAt = Date.now();
           this._upstreamReady = true;
           this.log('upstream-ready', { model: this.model, setupMs: setupAt - connectStartedAt, resumed: Boolean(resumeHandle) });
@@ -497,9 +501,7 @@ export class GeminiLiveSession extends EventEmitter {
 
       ws.addEventListener('error', () => {
         this.log('upstream-error', { model: this.model, afterSetup: Boolean(setupAt) });
-        if (!settled) {
-          settled = true;
-          clearTimeout(setupTimer);
+        if (settle()) {
           reject(new Error('upstream error'));
         }
       });
@@ -513,9 +515,7 @@ export class GeminiLiveSession extends EventEmitter {
           afterSetup: Boolean(setupAt),
           upMs: setupAt ? Date.now() - setupAt : null,
         });
-        if (!settled) {
-          settled = true;
-          clearTimeout(setupTimer);
+        if (settle()) {
           reject(new Error(`upstream closed before setup (code ${event?.code})`));
           return;
         }
@@ -640,9 +640,9 @@ export class GeminiLiveSession extends EventEmitter {
     // while gated). A raw frame proves nothing; only actual transcribed
     // speech (see the inputTranscription branch below) means the learner
     // spoke.
-    if (this.gate.isGated() || !this._upstreamReady) return false;
+    if (this.gate.isGated() || !this._sendUpstream(audioUpstreamFrame(base64Data))) return false;
     this._armThinkingTimer();
-    return this._sendUpstream(audioUpstreamFrame(base64Data));
+    return true;
   }
 
   sendText(text: string): void {

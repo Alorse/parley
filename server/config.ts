@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { MAX_RECONNECTS, RECONNECT_BASE_MS, SETUP_TIMEOUT_MS, TURN_WATCHDOG_MS } from './live.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = path.join(ROOT, '.env');
@@ -100,10 +101,10 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
     dataDir: env.DATA_DIR || '.data',
     maxSessions: Number(env.MAX_SESSIONS) || 4,
     warmupEnabled: env.WARMUP !== '0',
-    liveMaxReconnects: parseCount(env.PARLEY_MAX_RECONNECTS, 8),
-    liveReconnectBaseMs: parseCount(env.PARLEY_RECONNECT_BASE_MS, 500),
-    liveSetupTimeoutMs: parseCount(env.PARLEY_SETUP_TIMEOUT_MS, 15000),
-    liveTurnWatchdogMs: parseCount(env.PARLEY_TURN_WATCHDOG_MS, 10000),
+    liveMaxReconnects: parseCount(env.PARLEY_MAX_RECONNECTS, MAX_RECONNECTS),
+    liveReconnectBaseMs: parseCount(env.PARLEY_RECONNECT_BASE_MS, RECONNECT_BASE_MS),
+    liveSetupTimeoutMs: parseCount(env.PARLEY_SETUP_TIMEOUT_MS, SETUP_TIMEOUT_MS),
+    liveTurnWatchdogMs: parseCount(env.PARLEY_TURN_WATCHDOG_MS, TURN_WATCHDOG_MS),
     root: ROOT,
   };
 }

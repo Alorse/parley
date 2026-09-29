@@ -475,24 +475,28 @@ liveClient.addEventListener('message', (event) => {
   }
 });
 
-liveClient.addEventListener('close', () => {
+// Everything a finished session releases, however it ended.
+function teardownSession() {
   finalizeConversationMemory();
   state.pendingEndConversation = false;
   releaseWakeLock();
-  if (state.sessionStarted) {
-    // Ended from the other side (tutor unreachable, server restart, network):
-    // turn the mic off for real and say so, so it never looks like it is
-    // still listening (#17).
-    state.sessionStarted = false;
-    state.micOn = false;
-    audioCapture.stop();
-    audioPlayer.flush();
-    setUiState('idle');
-    updateMicUI();
-    updateEndButtonState();
-    if (el('error-card').classList.contains('hidden')) {
-      showError('The conversation ended. Tap the microphone to start again.');
-    }
+  audioCapture.stop();
+  audioPlayer.flush();
+  state.sessionStarted = false;
+  state.micOn = false;
+  setUiState('idle');
+  updateMicUI();
+  updateEndButtonState();
+}
+
+// Ended from the other side (tutor unreachable, server restart, network):
+// turn the mic off for real and say so, so it never looks like it is still
+// listening (#17).
+liveClient.addEventListener('close', () => {
+  if (!state.sessionStarted) return;
+  teardownSession();
+  if (el('error-card').classList.contains('hidden')) {
+    showError('The conversation ended. Tap the microphone to start again.');
   }
 });
 
@@ -531,22 +535,11 @@ el('mic-btn').addEventListener('click', async () => {
 // goodbye pair (see handleReview/the 'state' case above) — one way to end a
 // session, not two.
 function endSession() {
-  // Finalized here rather than in the 'close' listener: liveClient.stop()
-  // detaches the socket, so its close is no longer reported (a new session
-  // may already be starting by then). The listener covers remote ends.
-  finalizeConversationMemory();
-  state.pendingEndConversation = false;
-  releaseWakeLock();
+  // liveClient.stop() detaches the socket, so its close is not reported to
+  // the 'close' listener (a new session may already be starting by then):
+  // tear down here.
   liveClient.stop();
-  audioCapture.stop();
-  audioPlayer.flush();
-  state.sessionStarted = false;
-  state.micOn = false;
-  state.uiState = 'idle';
-  updateMicUI();
-  updateEndButtonState();
-  updateStatusLine();
-  orb.setState('idle');
+  teardownSession();
   resetTranscript();
 }
 
