@@ -96,6 +96,35 @@ npm run browser-check   # real headless Chrome: launches with a FAKE MICROPHONE
             #   [--mobile|--desktop] [--seconds N]
 ```
 
+### Reproduction harness (session lifecycle, audio, hearing)
+
+`test/harness/` holds a scriptable **fake Gemini Live upstream** and a preload
+that points the real, unmodified server at it (and answers review/translate
+calls locally), so lifecycle bugs reproduce offline and deterministically.
+Each fake session fills its audio with its own sample value, so any listener
+can tell which upstream session a chunk came from.
+
+```bash
+npm test                                   # includes test/live-harness.test.js:
+            # real server + fake upstream. Known, not-yet-fixed bugs are
+            # `todo` tests: reported, never failing the suite. When a fix
+            # lands, drop its `todo` so it becomes a regression test.
+
+node scripts/repro-browser.mjs [scenario ...]   # headless Chrome + fake mic
+            # + real server + fake upstream; instruments playback buffers,
+            # sockets, mic streams. Scenarios: double-tap, server-restart,
+            # end-restart, echo-window, upstream-drop-twice, two-tabs, idle-cpu
+node scripts/perf-server.mjs               # server CPU/RSS per live session (offline)
+
+# These three spend real quota — keep runs small:
+node scripts/live-probe.mjs                # Live turn timing + accepted setup fields
+node --import tsx scripts/speech-probe.mjs # what the tutor hears and replies for
+            # clean / doubled / quiet / accented / echo-only learner audio
+            # (--hint, --system, --prompt-file to try a fix without editing code)
+node scripts/perf-api.mjs [url]            # /live time-to-first-audio, review and
+            # translate latency, shell weight (defaults to a scratch :8399)
+```
+
 ## Testing the mic in a browser
 
 1. Run the server and open it over `localhost` or HTTPS (mic access requires a
@@ -173,8 +202,12 @@ server/    config.ts, tutor.ts, live.ts, protocol.ts, review.ts, translate.ts,
 public/    index.html, styles.css, app.js, live-client.js, audio-capture.js,
            pcm-worklet.js, audio-player.js, orb.js, icons.js, data.js,
            manifest.webmanifest, sw.js, icons/, fonts/
-scripts/   make_icons.py, e2e-live.mjs, browser-check.mjs, make-fake-mic.mjs
-test/      *.test.js, fixtures/speech.pcm (fixtures/fake-mic.wav is generated,
-           not committed — see scripts/make-fake-mic.mjs)
+scripts/   make_icons.py, e2e-live.mjs, browser-check.mjs, make-fake-mic.mjs,
+           repro-browser.mjs, perf-server.mjs, perf-api.mjs, live-probe.mjs,
+           speech-probe.mjs
+test/      *.test.js, harness/ (fake Gemini upstream + server helpers),
+           fixtures/speech.pcm, fixtures/speech-accented.pcm
+           (fixtures/fake-mic.wav is generated, not committed — see
+           scripts/make-fake-mic.mjs)
 assets/    screenshot.png
 ```
