@@ -123,12 +123,13 @@ export type ServerMessage = LiveEventMessage | ReviewMessage;
 export interface GeminiSetupFrame {
   setup: {
     model: string;
+    systemInstruction?: { parts: { text: string }[] };
     sessionResumption: { handle?: string };
     generationConfig: {
       responseModalities: string[];
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: string } } };
     };
-    inputAudioTranscription: Record<string, never>;
+    inputAudioTranscription: { languageCodes: string[] };
     outputAudioTranscription: Record<string, never>;
     realtimeInputConfig: {
       automaticActivityDetection: {

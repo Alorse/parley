@@ -15,10 +15,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import { startFakeGemini, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
+import { waitFor } from './harness/wait.mjs';
 import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
-import { buildSystemPrompt } from '../server/tutor.js';
+import { buildSystemPrompt, KICKOFF_NOTE, APP_NOTE_PREFIX } from '../server/tutor.js';
 
 const PERSONA_PREFIX = 'You are Parley';
+const kickoffs = (s) => s.textTurns.filter((t) => t.text === KICKOFF_NOTE).length;
 
 let gem;
 let srv;
@@ -66,15 +68,6 @@ async function connect() {
   return { ws, events, closed };
 }
 
-async function waitFor(predicate, timeoutMs = 3000, stepMs = 20) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    if (predicate()) return true;
-    await delay(stepMs);
-  }
-  return predicate();
-}
-
 const newSessions = (base) => gem.sessions.slice(base);
 const LOUD_FRAME = (() => {
   const b = Buffer.alloc(1024);
@@ -108,7 +101,7 @@ test('one start opens exactly one upstream session, and every audio chunk the cl
   ws.close();
 });
 
-test('the persona prompt is sent once, and mic audio is held back until the greeting has played', async () => {
+test('the persona travels in the setup, the kickoff turn is sent once, and mic audio is held back until the greeting has played', async () => {
   resetFake({ firstAudioDelayMs: 300 });
   const base = gem.sessions.length;
   const { ws, events } = await connect();
@@ -117,7 +110,9 @@ test('the persona prompt is sent once, and mic audio is held back until the gree
   await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
   stop();
   const [s] = newSessions(base);
-  assert.equal(s.textTurns.filter((t) => t.text.startsWith(PERSONA_PREFIX)).length, 1);
+  assert.ok(s.setup.systemInstruction.parts[0].text.startsWith(PERSONA_PREFIX));
+  assert.equal(s.textTurns.filter((t) => t.text.includes(PERSONA_PREFIX)).length, 0, 'the persona is never sent as a learner turn');
+  assert.equal(kickoffs(s), 1);
   const turnDone = events.find((e) => e.type === 'output-text' && e.final).at;
   assert.equal(s.audioFrames.filter((f) => f.at < turnDone).length, 0, 'no mic frame reached Gemini during the greeting');
   ws.close();
@@ -137,7 +132,8 @@ test('#13 a dropped upstream resumes the same conversation instead of starting o
   const second = newSessions(base)[1];
   try {
     assert.equal(second.setup.sessionResumption?.handle, `handle-${newSessions(base)[0].id}`, 'reconnect should resume with the last handle');
-    assert.equal(second.textTurns.filter((t) => t.text.startsWith(PERSONA_PREFIX)).length, 0, 'resumed session must not be re-greeted with the persona prompt');
+    assert.equal(kickoffs(second), 0, 'resumed session must not be re-greeted');
+    assert.ok(second.setup.systemInstruction.parts[0].text.startsWith(PERSONA_PREFIX), 'resumed session keeps the persona');
   } finally {
     ws.close();
   }
@@ -211,8 +207,8 @@ test('#16 repeated drops are each resumed with the latest handle, with one greet
   try {
     const mine = newSessions(base);
     for (let n = 1; n <= 3; n++) assert.equal(mine[n].setup.sessionResumption?.handle, `handle-${mine[n - 1].id}`);
-    const personas = mine.reduce((sum, s) => sum + s.textTurns.filter((t) => t.text.startsWith(PERSONA_PREFIX)).length, 0);
-    assert.equal(personas, 1, 'the persona prompt was sent exactly once');
+    const greetings = mine.reduce((sum, s) => sum + kickoffs(s), 0);
+    assert.equal(greetings, 1, 'the kickoff turn was sent exactly once');
     assert.equal(events.filter((e) => e.type === 'error').length, 0);
     assert.equal(ws.readyState, ws.OPEN);
   } finally {
@@ -418,7 +414,7 @@ class TextOnlyUpstream extends EventTarget {
 }
 TextOnlyUpstream.OPEN = 1;
 
-test('#14 the silence nudge is spoken as the tutor, never sent as if the learner had said it', { todo: 'the nudge is sent as a user turn today' }, async () => {
+test('#29 the silence nudge is spoken as the tutor, never sent as if the learner had said it', async () => {
   const session = new GeminiLiveSession({ apiKey: 'k', model: 'm', voice: 'Kore', webSocketImpl: TextOnlyUpstream });
   const started = session.start();
   const up = session.ws;
@@ -428,29 +424,38 @@ test('#14 the silence nudge is spoken as the tutor, never sent as if the learner
   await started;
   session.nudge.delayMs = 10;
   session.armSilenceNudge();
-  await delay(40);
+  await waitFor(() => up.sent.some((f) => JSON.stringify(f).includes('Take your time')), 1000, 5);
   session.stop();
   const nudge = up.sent.find((f) => JSON.stringify(f).includes('Take your time'));
   assert.ok(nudge, 'nudge was sent');
-  assert.notEqual(nudge.clientContent?.turns?.[0]?.role, 'user', 'the nudge reached the model as the learner speaking');
+  // A model-role turn would be the literal fix, but gemini-3.8-live stays
+  // silent after one (checked live), so the nudge is an app note the persona
+  // tells the tutor is never the learner speaking.
+  const text = nudge.clientContent.turns[0].parts[0].text;
+  assert.ok(text.startsWith(APP_NOTE_PREFIX), 'the nudge reached the model as the learner speaking');
 });
 
-test('#14 the tutor is told to say it did not understand instead of guessing', { todo: 'add an explicit "did not catch that" rule to the persona' }, () => {
+test('#14 the tutor is told to say it did not understand instead of guessing', () => {
   for (const feedbackDetail of ['every-turn', 'mistakes-only']) {
     const prompt = buildSystemPrompt({ feedbackDetail });
     assert.match(prompt, /didn['’]t catch|did not (catch|understand|hear)/i, feedbackDetail);
   }
 });
 
-test('#14 the tutor only ever asks the learner to repeat words the learner actually said', { todo: 'the every-turn cadence mandates a fix + "try saying" even for a perfect turn' }, () => {
+test('#14 the tutor only ever asks the learner to repeat words the learner actually said', () => {
   const prompt = buildSystemPrompt({ feedbackDetail: 'every-turn' });
   assert.doesNotMatch(prompt, /after every turn the learner speaks, even when they did well/i);
   assert.match(prompt, /never invent a (sentence|phrase)/i);
 });
 
-test('#14 the Live setup carries the persona as a system instruction and asks for English transcription', { todo: 'systemInstruction + English language hint (both accepted by gemini-3.8-live, see scripts/live-probe.mjs)' }, () => {
+test('#23 the Live setup carries the persona as a system instruction', () => {
+  const persona = buildSystemPrompt({});
+  const setup = /** @type {any} */ (buildSetupFrame({ model: 'm', voice: 'Kore', persona })).setup;
+  assert.deepEqual(setup.systemInstruction, { parts: [{ text: persona }] });
+});
+
+test('#28 the Live setup asks for English input transcription', () => {
   const setup = /** @type {any} */ (buildSetupFrame({ model: 'm', voice: 'Kore' })).setup;
-  assert.ok(setup.systemInstruction, 'persona is sent as a user turn today');
   assert.deepEqual(setup.inputAudioTranscription?.languageCodes, ['en-US']);
 });
 

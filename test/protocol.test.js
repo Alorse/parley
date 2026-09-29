@@ -58,7 +58,7 @@ test('buildSetupFrame shapes model, voice and VAD config', () => {
     'Kore',
   );
   assert.deepEqual(frame.setup.generationConfig.responseModalities, ['AUDIO']);
-  assert.deepEqual(frame.setup.inputAudioTranscription, {});
+  assert.deepEqual(frame.setup.inputAudioTranscription, { languageCodes: ['en-US'] });
   assert.deepEqual(frame.setup.outputAudioTranscription, {});
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.disabled, false);
   assert.equal(frame.setup.realtimeInputConfig.automaticActivityDetection.silenceDurationMs, 700);

@@ -154,10 +154,12 @@ node scripts/repro-browser.mjs [scenario ...]   # headless Chrome + fake mic
 node scripts/perf-server.mjs               # server CPU/RSS per live session (offline)
 
 # These three spend real quota — keep runs small:
-node scripts/live-probe.mjs                # Live turn timing + accepted setup fields
+node --import tsx scripts/live-probe.mjs    # Live turn timing + accepted setup fields
+            # (--persona user|system --runs N: time to the greeting's first
+            # audio with the persona as a user turn vs as systemInstruction)
 node --import tsx scripts/speech-probe.mjs # what the tutor hears and replies for
             # clean / doubled / quiet / accented / echo-only learner audio
-            # (--hint, --system, --prompt-file to try a fix without editing code)
+            # (--no-hint, --legacy, --prompt-file to try a fix without editing code)
 node scripts/perf-api.mjs [url]            # /live time-to-first-audio, review and
             # translate latency, shell weight (defaults to a scratch :8399)
 ```

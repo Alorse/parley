@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { GeminiLiveSession } from '../server/live.js';
+import { GeminiLiveSession, SilenceNudge } from '../server/live.js';
+import { APP_NOTE_PREFIX } from '../server/tutor.js';
+import { waitFor } from './harness/wait.mjs';
 
 // A minimal stand-in for the upstream WebSocket, driven manually so a test
 // can script exactly what "Gemini" sends back without any network. Mirrors
@@ -210,24 +212,36 @@ test('a completed turn\'s review-request payload carries the session\'s scenario
   session.stop();
 });
 
-// --- memory note flows into the persona turn --------------------------------
+// --- memory note flows into the persona --------------------------------
 
-test('a session with a memoryNote weaves it into the persona turn sent upstream', async () => {
-  const { ws } = await startSession({ memoryNote: 'talked about the weekend; the past tense was hard' });
-  const personaFrame = ws.sent[0];
-  assert.match(personaFrame.clientContent.turns[0].parts[0].text, /talked about the weekend; the past tense was hard/);
+async function personaOf(ws) {
+  await delay(0); // the setup frame goes out on the fake socket's 'open'
+  return ws.sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
+}
+
+test('a session with a memoryNote weaves it into the persona sent upstream', async () => {
+  const { session, ws } = await startSession({ memoryNote: 'talked about the weekend; the past tense was hard' });
+  assert.match(await personaOf(ws), /talked about the weekend; the past tense was hard/);
+  session.stop();
 });
 
 test('a session with no memoryNote mentions nothing about a remembered conversation', async () => {
-  const { ws } = await startSession();
-  const personaFrame = ws.sent[0];
-  assert.doesNotMatch(personaFrame.clientContent.turns[0].parts[0].text, /remember this from earlier conversations/i);
+  const { session, ws } = await startSession();
+  assert.doesNotMatch(await personaOf(ws), /remember this from earlier conversations/i);
+  session.stop();
 });
 
 // --- anti-freeze silence nudge, wired through a real session ----------------
 
 function textOf(frame) {
   return frame.clientContent?.turns?.[0]?.parts?.[0]?.text;
+}
+
+const nudgesSince = (ws, from) => ws.sent.slice(from).filter((f) => textOf(f)?.includes('Take your time'));
+
+async function waitForNudge(ws, from) {
+  await waitFor(() => nudgesSince(ws, from).length > 0, 1000, 5);
+  return nudgesSince(ws, from);
 }
 
 test('armSilenceNudge speaks the nudge via say() if the learner stays silent', async () => {
@@ -240,9 +254,10 @@ test('armSilenceNudge speaks the nudge via say() if the learner stays silent', a
   session.nudge.delayMs = 30; // short delay so the test doesn't wait 6s
   session.armSilenceNudge();
 
+  const nudgeFrames = await waitForNudge(ws, sentBeforeNudge);
   await delay(60);
-  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
-  assert.equal(nudgeFrames.length, 1, 'the nudge text was sent upstream exactly once');
+  assert.equal(nudgesSince(ws, sentBeforeNudge).length, 1, 'the nudge text was sent upstream exactly once');
+  assert.ok(textOf(nudgeFrames[0]).startsWith(APP_NOTE_PREFIX), 'sent as an app note, not as the learner speaking');
 
   session.stop();
 });
@@ -264,9 +279,7 @@ test('armSilenceNudge is NOT disarmed by a raw sendAudio frame — the client st
   // The browser client sends mic frames unconditionally, even while silent —
   // a raw frame must not be mistaken for the learner actually speaking.
   session.sendAudio('silent-mic-frame-the-client-sends-regardless');
-  await delay(60);
-
-  const nudgeFrames = ws.sent.slice(sentBeforeNudge).filter((f) => textOf(f)?.includes('Take your time'));
+  const nudgeFrames = await waitForNudge(ws, sentBeforeNudge);
   assert.equal(nudgeFrames.length, 1, 'a raw audio frame does not disarm the nudge, so it still fires');
 
   session.stop();
@@ -300,8 +313,9 @@ test('armSilenceNudge fires at most once even if re-armed after already firing',
   await delay(450);
 
   session.nudge.delayMs = 30;
+  const before = ws.sent.length;
   session.armSilenceNudge();
-  await delay(60);
+  assert.equal((await waitForNudge(ws, before)).length, 1, 'fired once');
 
   const sentAfterFirstFire = ws.sent.length;
   assert.equal(session.nudge.shouldFire(), false, 'already fired once for this arm');
@@ -311,4 +325,36 @@ test('armSilenceNudge fires at most once even if re-armed after already firing',
   assert.equal(nudgeFramesAfterWaiting.length, 0, 'no second nudge without a fresh arm');
 
   session.stop();
+});
+
+test('a nudge timer that fires a moment early re-checks instead of never nudging', async () => {
+  const { session, ws } = await startSession();
+  ws.emitServerMessage(audioChunkMessage());
+  ws.emitServerMessage(turnCompleteMessage()); // greeting
+  await delay(450);
+
+  // The clock falls 5 ms behind the timers right after arming, so the
+  // timer's first check finds the nudge not yet due.
+  let lag = 0;
+  session.nudge = new SilenceNudge({ delayMs: 20, now: () => Date.now() - lag });
+  const before = ws.sent.length;
+  session.armSilenceNudge();
+  lag = 5;
+  assert.equal((await waitForNudge(ws, before)).length, 1);
+  session.stop();
+});
+
+test('SilenceNudge reports how long until it is due, and nothing once fired or disarmed', () => {
+  let t = 1000;
+  const nudge = new SilenceNudge({ delayMs: 100, now: () => t });
+  assert.equal(nudge.msUntilDue(), null);
+  nudge.arm();
+  t += 40;
+  assert.equal(nudge.msUntilDue(), 60);
+  t += 60;
+  assert.equal(nudge.shouldFire(), true);
+  assert.equal(nudge.msUntilDue(), null);
+  nudge.arm();
+  nudge.disarm();
+  assert.equal(nudge.msUntilDue(), null);
 });

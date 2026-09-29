@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket as WsWebSocket } from 'ws';
-import { buildSystemPrompt } from './tutor.js';
+import { appNote, buildSystemPrompt, KICKOFF_NOTE } from './tutor.js';
 import { cleanReason, noopSessionLogger, type SessionLogger } from './session-log.js';
 import type {
   ClientMessage,
@@ -35,7 +35,12 @@ const UPSTREAM_BASE =
 const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
-const SILENCE_NUDGE_TEXT = "Take your time — try saying it, or we'll move on.";
+// An app note, not a learner turn: sent bare, the tutor took the nudge as
+// the learner's own words and answered them (#29). A model-role turn is
+// not an option: gemini-3.8-live stays silent after one.
+const SILENCE_NUDGE_NOTE = appNote(
+  `The learner has been quiet since your correction. Gently tell them, in your own voice, something like: "Take your time — try saying it, or we'll move on."`,
+);
 // Upstream drops were seen about every 8 minutes, so a long conversation
 // needs several resumes; the cap only stops a flapping upstream from looping
 // forever. Each drop gets a few attempts with exponential backoff.
@@ -63,14 +68,20 @@ export function buildSetupFrame({
   model,
   voice,
   resumeHandle = null,
+  persona = '',
 }: {
   model: string;
   voice: string;
   resumeHandle?: string | null;
+  persona?: string;
 }): GeminiSetupFrame {
   return {
     setup: {
       model: `models/${model}`,
+      // The persona as standing instructions, not as the learner's first
+      // message: the tutor starts speaking sooner and never mistakes its own
+      // instructions for something the learner said (#23, #26).
+      ...(persona ? { systemInstruction: { parts: [{ text: persona }] } } : {}),
       // Always on, so the upstream keeps sending sessionResumptionUpdate
       // handles; with a handle this setup continues that conversation.
       sessionResumption: resumeHandle ? { handle: resumeHandle } : {},
@@ -78,7 +89,11 @@ export function buildSetupFrame({
         responseModalities: ['AUDIO'],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
       },
-      inputAudioTranscription: {},
+      // The learner speaks English: without the hint the transcriber guesses
+      // the language every turn and writes short or unclear English in other
+      // scripts (#28). Accepted by gemini-3.8-live and
+      // gemini-3.1-flash-live-preview (scripts/live-probe.mjs).
+      inputAudioTranscription: { languageCodes: ['en-US'] },
       outputAudioTranscription: {},
       realtimeInputConfig: {
         automaticActivityDetection: {
@@ -247,12 +262,17 @@ export class SilenceNudge {
     return this._armedAt !== null;
   }
 
+  // How long until shouldFire() turns true; null once disarmed or fired.
+  msUntilDue(): number | null {
+    if (this._armedAt === null || this._fired) return null;
+    return Math.max(0, this.delayMs - (this._now() - this._armedAt));
+  }
+
   // True the first time delayMs has elapsed since arm(); false before that,
   // once disarmed, and on every call after it has already fired once — so a
   // caller can safely re-check without ever firing twice for the same arm.
   shouldFire(): boolean {
-    if (this._armedAt === null || this._fired) return false;
-    if (this._now() - this._armedAt < this.delayMs) return false;
+    if (this.msUntilDue() !== 0) return false;
     this._fired = true;
     return true;
   }
@@ -328,7 +348,7 @@ export class GeminiLiveSession extends EventEmitter {
   // the conversation: never logged).
   resumeHandle: string | null;
   turn: Turn;
-  // Learner turns only (silent persona/say turns excluded); lifecycle logging.
+  // Learner turns only (silent kickoff/say turns excluded); lifecycle logging.
   turnsCompleted: number;
   private _thinkingTimer: NodeJS.Timeout | undefined;
   private _resumeTimer: NodeJS.Timeout | undefined;
@@ -379,7 +399,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.log = log;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
     this.nudge = new SilenceNudge();
-    // The persona/greeting turn is sent as soon as setup completes, before
+    // The kickoff/greeting turn is sent as soon as setup completes, before
     // the learner has said anything. Close the mic gate immediately so any
     // audio the client streams while getUserMedia/connect is still settling
     // can't reach upstream and collide with that first turn's boundaries —
@@ -429,8 +449,9 @@ export class GeminiLiveSession extends EventEmitter {
 
   // Opens one upstream socket and resolves once its setup completes. Given a
   // resumption handle, the upstream restores the conversation it belongs to,
-  // so the persona turn is NOT sent again — resending it is what made the
-  // tutor greet the learner a second time with no memory of the talk (#16).
+  // so the kickoff turn is NOT sent again — a fresh opening turn is what made
+  // the tutor greet the learner a second time with no memory of the talk (#16).
+  // The persona goes in every setup, resumed or not.
   private _connect(resumeHandle: string | null): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -467,7 +488,7 @@ export class GeminiLiveSession extends EventEmitter {
       }, this.setupTimeoutMs);
 
       ws.addEventListener('open', () => {
-        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice, resumeHandle })));
+        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice, resumeHandle, persona: this._persona() })));
       });
 
       ws.addEventListener('message', (event: any) => {
@@ -488,10 +509,10 @@ export class GeminiLiveSession extends EventEmitter {
             // to the learner.
             this._reopenMic();
           } else {
-            // No 'listening' state here: the persona turn is already in
+            // No 'listening' state here: the kickoff turn is already in
             // flight and will produce 'speaking' once its audio starts, then
             // 'listening' once that greeting turn completes.
-            this._sendPersonaTurn();
+            this.say(KICKOFF_NOTE);
           }
           resolve();
           return;
@@ -577,8 +598,9 @@ export class GeminiLiveSession extends EventEmitter {
     this.emit('ended', reason);
   }
 
-  private _sendPersonaTurn(): void {
-    const prompt = buildSystemPrompt({
+  // Built per setup, so a resumed session picks up a name learned meanwhile.
+  private _persona(): string {
+    return buildSystemPrompt({
       scenario: this.scenario,
       level: this.level,
       nativeLanguage: this.nativeLanguage,
@@ -586,8 +608,6 @@ export class GeminiLiveSession extends EventEmitter {
       learnerName: this.learnerName,
       memoryNote: this.memoryNote,
     });
-    this.turn.silent = true;
-    this._sendTurn(prompt);
   }
 
   // A text turn always gets a reply, so the reply's turnComplete is awaited
@@ -650,6 +670,8 @@ export class GeminiLiveSession extends EventEmitter {
     this._sendTurn(text);
   }
 
+  // A turn the tutor answers that is not reviewed or counted as a learner
+  // turn: the client's hint/scenario requests and the server's app notes.
   say(text: string): void {
     this.turn.silent = true;
     this._sendTurn(text);
@@ -670,16 +692,25 @@ export class GeminiLiveSession extends EventEmitter {
   // detection never starts a new upstream turn on its own — nothing else in
   // this session would ever speak again — so this is what keeps the
   // conversation from freezing after the pace change in Part 1. Fires at
-  // most once per arm (SilenceNudge.shouldFire), and only speaks via say(),
-  // which is already silent (no review, no score history pollution).
+  // most once per arm (SilenceNudge.shouldFire), and is sent via say() as an
+  // app note (no review, no score history pollution).
   armSilenceNudge(): void {
     this.nudge.arm();
+    this._scheduleNudge(this.nudge.delayMs);
+  }
+
+  // A timer can fire a millisecond before Date.now() says the delay has
+  // passed; re-check then instead of silently never nudging.
+  private _scheduleNudge(ms: number): void {
     clearTimeout(this._nudgeTimer);
     this._nudgeTimer = setTimeout(() => {
       if (this.nudge.shouldFire()) {
-        this.say(SILENCE_NUDGE_TEXT);
+        this.say(SILENCE_NUDGE_NOTE);
+        return;
       }
-    }, this.nudge.delayMs);
+      const left = this.nudge.msUntilDue();
+      if (left !== null) this._scheduleNudge(Math.max(1, left));
+    }, ms);
   }
 
   private _disarmSilenceNudge(): void {

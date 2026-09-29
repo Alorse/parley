@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSystemPrompt } from '../server/tutor.js';
+import { buildSystemPrompt, APP_NOTE_PREFIX, KICKOFF_NOTE } from '../server/tutor.js';
 
 test('buildSystemPrompt injects the scenario', () => {
   const prompt = buildSystemPrompt({ scenario: 'A café', level: 'B1' });
@@ -129,4 +129,34 @@ test('buildSystemPrompt tells the tutor to stay in character for an in-scene goo
 test('buildSystemPrompt says nothing about staying in character for a goodbye when there is no role-play scenario', () => {
   const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
   assert.doesNotMatch(prompt, /stay in character and respond the way that character naturally would/i);
+});
+
+// --- hearing and honesty (#26) -------------------------------------------
+
+test('buildSystemPrompt only suggests a retry for a real mistake, even in the every-turn cadence', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', feedbackDetail: 'every-turn' });
+  assert.match(prompt, /after every turn the learner speaks, give brief, specific encouragement/i);
+  assert.match(prompt, /only suggest a fix and a retry when there was a real .*mistake/i);
+  assert.doesNotMatch(prompt, /small polish tip/i);
+});
+
+test('buildSystemPrompt only lets the tutor correct words it heard clearly, in either feedback cadence', () => {
+  for (const feedbackDetail of ['every-turn', 'mistakes-only']) {
+    const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1', feedbackDetail });
+    assert.match(prompt, /only correct words you actually heard clearly/i);
+    assert.match(prompt, /the learner's own words with your one fix applied/i);
+    assert.match(prompt, /could you say it again\?/i);
+  }
+});
+
+test('buildSystemPrompt tells the tutor that app notes are not the learner speaking', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.ok(prompt.includes(`"${APP_NOTE_PREFIX}" comes from the Parley app, not from the learner`));
+  assert.ok(KICKOFF_NOTE.startsWith(APP_NOTE_PREFIX));
+});
+
+test('buildSystemPrompt helps with Spanish without turning it into a correction and retry (#28)', () => {
+  const prompt = buildSystemPrompt({ scenario: 'Just talk', level: 'B1' });
+  assert.match(prompt, /Speaking Spanish is not a mistake to correct/);
+  assert.match(prompt, /do not ask them to repeat the English phrase/i);
 });

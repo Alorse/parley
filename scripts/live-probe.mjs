@@ -15,21 +15,32 @@
 // Uses the API sparingly: one short greeting turn plus one setup-only
 // connection per probed variant (no audio is streamed for the variants).
 //
-// Usage: GOOGLE_API_KEY=... node scripts/live-probe.mjs [--model M] [--variants-only|--timing-only]
+// Usage: GOOGLE_API_KEY=... node --import tsx scripts/live-probe.mjs [--model M]
+//          [--variants-only|--timing-only] [--persona short|user|system] [--runs N]
+//
+// --persona picks what opens the timed turn: `short` (default) a one-line
+// tutor prompt; `user` Parley's full persona sent as the first user turn (how
+// Parley did it before #23); `system` Parley's own setup, persona as
+// systemInstruction plus the short kickoff turn. --runs repeats the timed
+// turn and prints the median of each number.
 
 import { WebSocket } from 'ws';
+import { buildSetupFrame, textUpstreamFrame, upstreamUrl } from '../server/live.ts';
+import { buildSystemPrompt, KICKOFF_NOTE } from '../server/tutor.ts';
 
 const args = process.argv.slice(2);
-const modelIdx = args.indexOf('--model');
-const MODEL = modelIdx !== -1 ? args[modelIdx + 1] : process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live';
+const argValue = (name, fallback) => (args.includes(name) ? args[args.indexOf(name) + 1] : fallback);
+const MODEL = argValue('--model', process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live');
+const PERSONA = argValue('--persona', 'short');
+const RUNS = Number(argValue('--runs', '1'));
+const PROBE_LEARNER = { scenario: 'Just talk', level: 'B1', learnerName: 'Ana' };
+const SHORT_PROMPT = 'You are a friendly English tutor. Greet the learner in two or three sentences and ask what they did today.';
 const KEY = process.env.GOOGLE_API_KEY;
 if (!KEY) {
   console.error('GOOGLE_API_KEY is required');
   process.exit(2);
 }
-const URL_ =
-  'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=' +
-  KEY;
+const URL_ = upstreamUrl(KEY);
 
 const OUTPUT_BYTES_PER_SECOND = 24000 * 2; // 24 kHz mono PCM16
 
@@ -79,7 +90,19 @@ function open(setup, { timeoutMs = 15000 } = {}) {
   });
 }
 
+// The setup frame and the text of the turn that makes the tutor speak first.
+// `user` and `system` both use Parley's own setup frame, so they differ only
+// in where the persona travels.
+function openingFor(persona) {
+  if (persona === 'short') return { setup: baseSetup(), turn: SHORT_PROMPT };
+  const prompt = buildSystemPrompt(PROBE_LEARNER);
+  if (persona === 'user') return { setup: buildSetupFrame({ model: MODEL, voice: 'Kore' }), turn: prompt };
+  if (persona === 'system') return { setup: buildSetupFrame({ model: MODEL, voice: 'Kore', persona: prompt }), turn: KICKOFF_NOTE };
+  throw new Error(`unknown --persona ${persona}`);
+}
+
 async function timing() {
+  const opening = openingFor(PERSONA);
   const t = { sentAt: 0, firstAudio: null, lastAudio: null, turnComplete: null, chunks: 0, audioBytes: 0, chunkSizes: [], wireBytes: 0, text: '' };
   const t0 = performance.now();
   const result = await new Promise((resolve) => {
@@ -88,26 +111,14 @@ async function timing() {
     const timer = setTimeout(() => ws.close(), 30000);
     ws.on('open', () => {
       out.openMs = Math.round(performance.now() - t0);
-      ws.send(JSON.stringify(baseSetup()));
+      ws.send(JSON.stringify(opening.setup));
     });
     ws.on('message', (raw) => {
       const msg = JSON.parse(raw.toString());
       if (msg.setupComplete) {
         out.setupMs = Math.round(performance.now() - t0);
         t.sentAt = performance.now();
-        ws.send(
-          JSON.stringify({
-            clientContent: {
-              turns: [
-                {
-                  role: 'user',
-                  parts: [{ text: 'You are a friendly English tutor. Greet the learner in two or three sentences and ask what they did today.' }],
-                },
-              ],
-              turnComplete: true,
-            },
-          }),
-        );
+        ws.send(JSON.stringify(textUpstreamFrame(opening.turn)));
         return;
       }
       const sc = msg.serverContent;
@@ -136,12 +147,14 @@ async function timing() {
 
   const audioSeconds = t.audioBytes / OUTPUT_BYTES_PER_SECOND;
   const genSeconds = t.firstAudio && t.turnComplete ? (t.turnComplete - t.firstAudio) / 1000 : NaN;
-  const sorted = [...t.chunkSizes].sort((a, b) => a - b);
   const report = {
     model: MODEL,
+    persona: PERSONA,
     connectToOpenMs: result.openMs,
     connectToSetupCompleteMs: result.setupMs,
     promptToFirstAudioMs: t.firstAudio ? Math.round(t.firstAudio - t.sentAt) : null,
+    // What the learner waits for after tapping the mic (minus the browser hop).
+    connectToFirstAudioMs: t.firstAudio ? Math.round(t.firstAudio - t0) : null,
     firstAudioToTurnCompleteMs: Number.isFinite(genSeconds) ? Math.round(genSeconds * 1000) : null,
     lastAudioToTurnCompleteMs: t.lastAudio && t.turnComplete ? Math.round(t.turnComplete - t.lastAudio) : null,
     audioSeconds: +audioSeconds.toFixed(2),
@@ -154,8 +167,8 @@ async function timing() {
     // delay minus network and device output latency as echo margin.
     turnCompleteMinusPlaybackEndMs: Number.isFinite(genSeconds) ? Math.round((genSeconds - audioSeconds) * 1000) : null,
     audioChunks: t.chunks,
-    chunkBytesMedian: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
-    chunkBytesMax: sorted.length ? sorted[sorted.length - 1] : null,
+    chunkBytesMedian: median(t.chunkSizes),
+    chunkBytesMax: t.chunkSizes.length ? Math.max(...t.chunkSizes) : null,
     pcmBytes: t.audioBytes,
     clientWireBytesAsBase64Json: t.wireBytes,
     wireOverheadPct: t.audioBytes ? Math.round((t.wireBytes / t.audioBytes - 1) * 100) : null,
@@ -192,5 +205,22 @@ async function variants() {
 
 const runTiming = !args.includes('--variants-only');
 const runVariants = !args.includes('--timing-only');
-if (runTiming) console.log('timing:', JSON.stringify(await timing(), null, 2));
+function median(xs) {
+  const sorted = xs.filter((x) => typeof x === 'number').sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+}
+
+if (runTiming) {
+  const reports = [];
+  for (let i = 0; i < RUNS; i++) {
+    const r = await timing();
+    reports.push(r);
+    if (RUNS === 1) console.log('timing:', JSON.stringify(r, null, 2));
+    else console.log(`run ${i + 1}:`, JSON.stringify({ setup: r.connectToSetupCompleteMs, promptToFirstAudio: r.promptToFirstAudioMs, connectToFirstAudio: r.connectToFirstAudioMs, transcript: r.transcript }));
+  }
+  if (RUNS > 1) {
+    const keys = ['connectToSetupCompleteMs', 'promptToFirstAudioMs', 'connectToFirstAudioMs'];
+    console.log('timing medians:', JSON.stringify({ model: MODEL, persona: PERSONA, runs: RUNS, ...Object.fromEntries(keys.map((k) => [k, median(reports.map((r) => r[k]))])) }));
+  }
+}
 if (runVariants) console.log('setup variants:', JSON.stringify(await variants(), null, 2));
