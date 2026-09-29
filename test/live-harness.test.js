@@ -13,7 +13,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
-import { startFakeGemini, tagOfChunk } from './harness/fake-gemini.mjs';
+import { startFakeGemini, sessionTag, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
 import { waitFor } from './harness/wait.mjs';
 import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
@@ -97,7 +97,7 @@ test('one start opens exactly one upstream session, and every audio chunk the cl
   const mine = newSessions(base);
   assert.equal(mine.length, 1);
   const tags = new Set(events.filter((e) => e.type === 'audio').map((e) => e.tag));
-  assert.deepEqual([...tags], [mine[0].id * 1000]);
+  assert.deepEqual([...tags], [sessionTag(mine[0].id)]);
   ws.close();
 });
 
@@ -182,9 +182,9 @@ test('#13 when the upstream drops, the client is told to drop the queued audio o
   // Once resumed, make the new upstream speak so the ordering is observable.
   await waitFor(() => events.filter((e) => e.type === 'ready').length === 2, 3000);
   ws.send(JSON.stringify({ type: 'text', text: 'Are you still there?' }));
-  await waitFor(() => events.some((e) => e.type === 'audio' && e.tag === (newSessions(base)[1]?.id ?? -1) * 1000), 3000);
+  await waitFor(() => events.some((e) => e.type === 'audio' && newSessions(base)[1] && e.tag === sessionTag(newSessions(base)[1].id)), 3000);
   try {
-    const firstNewAudio = events.findIndex((e) => e.type === 'audio' && e.tag !== newSessions(base)[0].id * 1000);
+    const firstNewAudio = events.findIndex((e) => e.type === 'audio' && e.tag !== sessionTag(newSessions(base)[0].id));
     const reconnectIdx = events.findIndex((e) => e.type === 'reconnecting');
     const flushIdx = events.findIndex((e, i) => i > reconnectIdx && e.type === 'interrupted');
     assert.ok(reconnectIdx !== -1 && flushIdx !== -1 && firstNewAudio !== -1 && flushIdx < firstNewAudio, 'expected reconnecting -> interrupted -> new audio');
