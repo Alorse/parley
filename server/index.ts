@@ -227,6 +227,8 @@ wss.on('connection', (ws) => {
           learnerName: name,
           memoryNote,
           log,
+          maxReconnects: config.liveMaxReconnects,
+          reconnectBaseMs: config.liveReconnectBaseMs,
         });
 
         candidate.on('client', (clientMsg: LiveEventMessage) => {

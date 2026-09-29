@@ -74,3 +74,15 @@ test('buildConfig falls back to defaults when the fallback env vars are empty', 
 test('buildConfig throws without an API key', () => {
   assert.throws(() => buildConfig({}), /GOOGLE_API_KEY/);
 });
+
+test('buildConfig reads the live reconnect limit and backoff, ignoring junk', () => {
+  const defaults = buildConfig({ GOOGLE_API_KEY: 'k' });
+  assert.equal(defaults.liveMaxReconnects, 8);
+  assert.equal(defaults.liveReconnectBaseMs, 500);
+  const set = buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_MAX_RECONNECTS: '0', PARLEY_RECONNECT_BASE_MS: '50' });
+  assert.equal(set.liveMaxReconnects, 0);
+  assert.equal(set.liveReconnectBaseMs, 50);
+  const junk = buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_MAX_RECONNECTS: 'lots', PARLEY_RECONNECT_BASE_MS: '-1' });
+  assert.equal(junk.liveMaxReconnects, 8);
+  assert.equal(junk.liveReconnectBaseMs, 500);
+});

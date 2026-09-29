@@ -92,6 +92,7 @@ export async function startFakeGemini(opts = {}) {
       openedAt: Date.now(),
       closedAt: null,
       setup: null,
+      readyAt: null, // when setupComplete was sent
       textTurns: [],
       audioFrames: [], // { at, bytes, rms }
       replies: 0,
@@ -137,6 +138,7 @@ export async function startFakeGemini(opts = {}) {
         session.setup = msg.setup;
         if (o.neverCompleteSetup) return;
         setTimeout(() => {
+          session.readyAt = Date.now();
           send({ setupComplete: {} });
           if (o.sendResumptionHandles) send({ sessionResumptionUpdate: { newHandle: `handle-${session.id}`, resumable: true } });
         }, o.setupDelayMs);

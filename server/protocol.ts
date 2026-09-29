@@ -123,6 +123,7 @@ export type ServerMessage = LiveEventMessage | ReviewMessage;
 export interface GeminiSetupFrame {
   setup: {
     model: string;
+    sessionResumption: { handle?: string };
     generationConfig: {
       responseModalities: string[];
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: string } } };
@@ -172,12 +173,16 @@ export interface GeminiGoAway {
   timeLeft?: string;
 }
 
-// The downstream frame received over the raw upstream WebSocket. setupComplete
-// and sessionResumptionUpdate are only ever checked for presence, never read
-// into, so they're left as `unknown`.
+export interface GeminiSessionResumptionUpdate {
+  newHandle?: string;
+  resumable?: boolean;
+}
+
+// The downstream frame received over the raw upstream WebSocket.
+// setupComplete is only ever checked for presence, so it's left `unknown`.
 export interface GeminiServerFrame {
   setupComplete?: unknown;
   serverContent?: GeminiServerContent;
   goAway?: GeminiGoAway;
-  sessionResumptionUpdate?: unknown;
+  sessionResumptionUpdate?: GeminiSessionResumptionUpdate;
 }

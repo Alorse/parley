@@ -46,6 +46,7 @@ const STATUS_TEXT = {
   listening: 'Listening…',
   thinking: 'Thinking…',
   speaking: 'Parley is speaking',
+  reconnecting: 'Reconnecting…',
 };
 
 function escapeHtml(str) {
@@ -172,6 +173,14 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 
 function updateStatusLine() {
   el('status-line').textContent = STATUS_TEXT[state.uiState] || STATUS_TEXT.idle;
+}
+
+/** @param {string} value one of the STATUS_TEXT keys */
+function setUiState(value) {
+  state.uiState = value;
+  updateStatusLine();
+  orb.setState(value === 'reconnecting' ? 'thinking' : value);
+  updateWaveformVisibility();
 }
 
 function renderTopicChip() {
@@ -418,10 +427,7 @@ liveClient.addEventListener('message', (event) => {
       if (msg.value === 'speaking' && state.uiState !== 'speaking') {
         el('tutor-translation').classList.add('hidden');
       }
-      state.uiState = msg.value;
-      updateStatusLine();
-      orb.setState(msg.value);
-      updateWaveformVisibility();
+      setUiState(msg.value);
       if (msg.value === 'listening' && state.pendingEndConversation) {
         state.pendingEndConversation = false;
         endSession();
@@ -453,7 +459,10 @@ liveClient.addEventListener('message', (event) => {
       handleReview(msg);
       break;
     case 'reconnecting':
+      // The server holds the mic and resumes the same conversation; the
+      // 'interrupted' that follows drops the lost turn's queued audio.
       showError('Reconnecting to the tutor…');
+      setUiState('reconnecting');
       break;
     case 'going-away':
       showError('This session will end soon — feel free to wrap up.');
@@ -795,7 +804,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=8').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=9').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });

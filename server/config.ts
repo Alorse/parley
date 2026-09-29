@@ -17,7 +17,16 @@ export interface ParleyConfig {
   dataDir: string;
   maxSessions: number;
   warmupEnabled: boolean;
+  // Upstream reconnects allowed per /live session, and the first backoff.
+  liveMaxReconnects: number;
+  liveReconnectBaseMs: number;
   root: string;
+}
+
+// Non-negative integer from the env, or the default when unset/invalid.
+function parseCount(value: string | undefined, fallback: number): number {
+  const n = Number(value);
+  return value !== undefined && value !== '' && Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
 /**
@@ -87,6 +96,8 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
     dataDir: env.DATA_DIR || '.data',
     maxSessions: Number(env.MAX_SESSIONS) || 4,
     warmupEnabled: env.WARMUP !== '0',
+    liveMaxReconnects: parseCount(env.PARLEY_MAX_RECONNECTS, 8),
+    liveReconnectBaseMs: parseCount(env.PARLEY_RECONNECT_BASE_MS, 500),
     root: ROOT,
   };
 }
@@ -106,6 +117,8 @@ function filterProcessEnv(): Record<string, string> {
     'DATA_DIR',
     'MAX_SESSIONS',
     'WARMUP',
+    'PARLEY_MAX_RECONNECTS',
+    'PARLEY_RECONNECT_BASE_MS',
   ];
   const out: Record<string, string> = {};
   for (const key of keys) {

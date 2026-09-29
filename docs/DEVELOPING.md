@@ -36,6 +36,8 @@ finished turn into a structured review (score, corrections, words).
 | `ACCESS_TOKENS` | empty | optional comma-separated bearer tokens (unused if empty) |
 | `DATA_DIR` | `.data` | where the tiny JSON profile store lives |
 | `MAX_SESSIONS` | `4` | concurrent `/live` sessions before new ones get `{code:"busy"}` |
+| `PARLEY_MAX_RECONNECTS` | `8` | upstream reconnect attempts per `/live` session before it gives up |
+| `PARLEY_RECONNECT_BASE_MS` | `500` | first reconnect backoff; doubles per attempt after a drop (max 4 s, 3 attempts per drop) |
 
 `.env` is parsed by a ~20-line hand-rolled parser in `server/config.ts` — no
 `dotenv` dependency. It is git-ignored; never commit it.
@@ -67,6 +69,15 @@ Events: `open`, `busy`, `start`, `upstream-ready` (model, setup time),
 learner turns, reconnects, client close code). They carry lifecycle metadata
 only — never speech, transcripts, audio, the API key or resumption handles
 (`server/session-log.ts`).
+
+## Upstream drops
+
+The Live upstream closes without warning now and then (seen: close 1011 after
+about 8 minutes). Every setup asks for session resumption, and the server keeps
+the latest `sessionResumptionUpdate` handle. On a drop it tells the client
+`reconnecting` then `interrupted` (flush the lost turn's audio), holds the mic,
+and reconnects with the handle, so the conversation continues with its context
+and no second greeting; `ready` + `state: listening` follow once it is back.
 
 ## Node version
 
