@@ -85,7 +85,8 @@ No wait is unbounded: setup has a deadline, and a reply whose `turnComplete`
 never arrives is completed by the server so the mic reopens. When the tutor
 can't be reached any more (reconnects exhausted, or no model completes setup)
 the server sends an `error`, frees the `MAX_SESSIONS` slot and closes the
-socket; the client turns the mic off and says the conversation ended.
+socket; the client turns the mic off and says the conversation ended. A second
+`start` on one socket is rejected with `{code:"already-started"}`.
 
 ## Node version
 

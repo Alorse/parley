@@ -174,6 +174,7 @@ wss.on('connection', (ws) => {
   // The candidate whose upstream setup is in flight, so a client that leaves
   // mid-setup doesn't leave it running (and greeting nobody).
   let pending: GeminiLiveSession | null = null;
+  let started = false;
   let released = false;
   let endReason = 'client-closed';
   let alive = true;
@@ -217,6 +218,16 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'start') {
+      // One conversation per socket: a second start would open a second
+      // upstream and interleave two voices into one client.
+      if (started) {
+        log('start-rejected', { reason: 'already-started' });
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: 'error', message: 'This conversation has already started.', code: 'already-started' }));
+        }
+        return;
+      }
+      started = true;
       const profile = store.read<StoredProfile>('profile', {});
       const scenario = msg.scenario ?? profile.scenario ?? 'Just talk';
       const level = msg.level ?? profile.level ?? 'B1';

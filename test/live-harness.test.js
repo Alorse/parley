@@ -281,7 +281,7 @@ test('#13 a client that leaves while the upstream is still being set up does not
   assert.equal(open, 0, `${open} upstream session(s) left open (and greeting nobody) after the client left`);
 });
 
-test('#13 a second start on the same socket does not open a second upstream session', { todo: 'ignore or reject a repeated start' }, async () => {
+test('#13 a second start on the same socket does not open a second upstream session', async () => {
   resetFake();
   const base = gem.sessions.length;
   const { ws, events } = await connect();
@@ -293,6 +293,7 @@ test('#13 a second start on the same socket does not open a second upstream sess
   ws.close();
   assert.equal(newSessions(base).length, 1, 'two upstream sessions');
   assert.equal(tags.size, 1, 'two voices interleaved into one client');
+  assert.equal(events.find((e) => e.type === 'error')?.code, 'already-started');
 });
 
 test('#17 the turn watchdog waits for a burst-sent reply to finish playing before stepping in', async () => {
