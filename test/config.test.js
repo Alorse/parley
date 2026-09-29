@@ -86,3 +86,12 @@ test('buildConfig reads the live reconnect limit and backoff, ignoring junk', ()
   assert.equal(junk.liveMaxReconnects, 8);
   assert.equal(junk.liveReconnectBaseMs, 500);
 });
+
+test('buildConfig reads the live setup timeout and turn watchdog', () => {
+  const defaults = buildConfig({ GOOGLE_API_KEY: 'k' });
+  assert.equal(defaults.liveSetupTimeoutMs, 15000);
+  assert.equal(defaults.liveTurnWatchdogMs, 10000);
+  const set = buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_SETUP_TIMEOUT_MS: '1000', PARLEY_TURN_WATCHDOG_MS: '1500' });
+  assert.equal(set.liveSetupTimeoutMs, 1000);
+  assert.equal(set.liveTurnWatchdogMs, 1500);
+});

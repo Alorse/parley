@@ -480,10 +480,19 @@ liveClient.addEventListener('close', () => {
   state.pendingEndConversation = false;
   releaseWakeLock();
   if (state.sessionStarted) {
+    // Ended from the other side (tutor unreachable, server restart, network):
+    // turn the mic off for real and say so, so it never looks like it is
+    // still listening (#17).
     state.sessionStarted = false;
     state.micOn = false;
+    audioCapture.stop();
+    audioPlayer.flush();
+    setUiState('idle');
     updateMicUI();
     updateEndButtonState();
+    if (el('error-card').classList.contains('hidden')) {
+      showError('The conversation ended. Tap the microphone to start again.');
+    }
   }
 });
 
@@ -522,10 +531,12 @@ el('mic-btn').addEventListener('click', async () => {
 // goodbye pair (see handleReview/the 'state' case above) — one way to end a
 // session, not two.
 function endSession() {
-  // finalizeConversationMemory() and releaseWakeLock() are not called here:
-  // liveClient.stop() closes the socket, which fires the 'close' listener
-  // below — the single place a session's end is actually detected, whatever
-  // caused it.
+  // Finalized here rather than in the 'close' listener: liveClient.stop()
+  // detaches the socket, so its close is no longer reported (a new session
+  // may already be starting by then). The listener covers remote ends.
+  finalizeConversationMemory();
+  state.pendingEndConversation = false;
+  releaseWakeLock();
   liveClient.stop();
   audioCapture.stop();
   audioPlayer.flush();

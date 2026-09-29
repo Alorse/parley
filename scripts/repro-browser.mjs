@@ -20,7 +20,7 @@
 // Usage:
 //   node scripts/repro-browser.mjs [scenario ...] [--port N] [--json out.json]
 // Scenarios: double-tap, server-restart, end-restart, echo-window,
-//            upstream-drop-twice, two-tabs, idle-cpu   (default: all)
+//            upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
 //
 // Needs Chrome/Chromium (CHROME_PATH or the usual locations). The scratch
 // server is started on a free port (or --port) and stopped by PID only.
@@ -41,7 +41,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
 };
-const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'upstream-drop-twice', 'two-tabs', 'idle-cpu'];
+const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
 const flagValues = new Set([flag('--port'), flag('--json')]);
 const requested = argv.filter((a) => !a.startsWith('--') && !flagValues.has(a));
 const scenarios = requested.length ? requested : ALL;
@@ -392,6 +392,32 @@ const SCENARIOS = {
           framesReachingGeminiIn10s: upstreamFramesAfter - upstreamFramesBefore,
           serverActiveSessions: health.activeSessions,
         },
+      };
+    });
+  },
+
+  // Gemini drops the connection and cannot be reached again.
+  async 'upstream-lost'() {
+    return withRig({ replySeconds: 2, firstAudioDelayMs: 300 }, async ({ chrome, srv, gem }) => {
+      const page = await chrome.newPage(srv.url);
+      await page.click('mic-btn');
+      await sleep(4000);
+      gem.options.rejectConnections = true;
+      gem.sessions.at(-1).drop();
+      await sleep(6000);
+      const a = await page.summary();
+      await sleep(3000);
+      const b = await page.summary();
+      const health = await (await fetch(`${srv.url}/api/health`)).json();
+      return {
+        expected: 'within a few seconds: socket closed, mic off, a clear message, slot freed',
+        status: b.status,
+        micStatus: b.micStatus,
+        error: b.error,
+        liveSockets: b.liveSockets,
+        liveMicTracks: b.liveMicTracks,
+        micFramesPerSecondStillSent: framesPerSecond(a, b, 3),
+        serverActiveSessions: health.activeSessions,
       };
     });
   },

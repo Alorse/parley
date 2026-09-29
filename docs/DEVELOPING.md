@@ -38,6 +38,8 @@ finished turn into a structured review (score, corrections, words).
 | `MAX_SESSIONS` | `4` | concurrent `/live` sessions before new ones get `{code:"busy"}` |
 | `PARLEY_MAX_RECONNECTS` | `8` | upstream reconnect attempts per `/live` session before it gives up |
 | `PARLEY_RECONNECT_BASE_MS` | `500` | first reconnect backoff; doubles per attempt after a drop (max 4 s, 3 attempts per drop) |
+| `PARLEY_SETUP_TIMEOUT_MS` | `15000` | an upstream setup that takes longer fails (next model / next attempt) |
+| `PARLEY_TURN_WATCHDOG_MS` | `10000` | how long past a reply's playback the server waits for `turnComplete` before completing the turn itself |
 
 `.env` is parsed by a ~20-line hand-rolled parser in `server/config.ts` — no
 `dotenv` dependency. It is git-ignored; never commit it.
@@ -78,6 +80,12 @@ the latest `sessionResumptionUpdate` handle. On a drop it tells the client
 `reconnecting` then `interrupted` (flush the lost turn's audio), holds the mic,
 and reconnects with the handle, so the conversation continues with its context
 and no second greeting; `ready` + `state: listening` follow once it is back.
+
+No wait is unbounded: setup has a deadline, and a reply whose `turnComplete`
+never arrives is completed by the server so the mic reopens. When the tutor
+can't be reached any more (reconnects exhausted, or no model completes setup)
+the server sends an `error`, frees the `MAX_SESSIONS` slot and closes the
+socket; the client turns the mic off and says the conversation ended.
 
 ## Node version
 

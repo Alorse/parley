@@ -46,6 +46,7 @@ function resetFake(overrides = {}) {
     setupDelayMs: 0,
     neverCompleteSetup: false,
     omitTurnComplete: false,
+    rejectConnections: false,
     ...overrides,
   });
 }
@@ -219,33 +220,44 @@ test('#16 repeated drops are each resumed with the latest handle, with one greet
   }
 });
 
-test('#13 once the upstream is lost for good, the session ends cleanly and frees its slot', { todo: 'close the client socket (or recover) instead of leaving a zombie session' }, async () => {
+test('#13 once the upstream is lost for good, the session ends cleanly and frees its slot', async () => {
   resetFake();
   const base = gem.sessions.length;
   const { ws, events, closed } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));
   await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const stop = streamMic(ws);
   newSessions(base)[0].drop();
-  await waitFor(() => newSessions(base)[1]?.replies > 0);
+  await waitFor(() => newSessions(base)[1]?.readyAt);
   const before = (await health()).activeSessions;
+  gem.options.rejectConnections = true;
   newSessions(base)[1].drop();
-  const ended = await Promise.race([closed.then(() => true), delay(2000).then(() => false)]);
+  const ended = await Promise.race([closed.then(() => true), delay(3000).then(() => false)]);
+  stop();
+  gem.options.rejectConnections = false;
   const afterCount = (await health()).activeSessions;
   ws.close();
-  assert.ok(ended, 'client socket should be closed (today it stays open, the mic keeps streaming into nothing)');
+  assert.ok(ended, 'client socket should be closed so the client stops its mic');
+  const error = events.find((e) => e.type === 'error');
+  assert.equal(error?.code, 'upstream-closed', 'the client is told why');
   assert.equal(afterCount, before - 1, 'the dead session must stop counting against MAX_SESSIONS');
 });
 
-test('#13 an upstream that never completes setup fails the session with an error instead of hanging', { todo: 'add a setup timeout (PARLEY_SETUP_TIMEOUT_MS here)' }, async () => {
+test('#13 an upstream that never completes setup fails the session with an error instead of hanging', async () => {
   resetFake({ neverCompleteSetup: true });
-  const { ws, events } = await connect();
+  const base = gem.sessions.length;
+  const { ws, events, closed } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));
-  const gotError = await waitFor(() => events.some((e) => e.type === 'error'), 2500);
+  // PARLEY_SETUP_TIMEOUT_MS=1000 per live model, and there are two models.
+  const gotError = await waitFor(() => events.some((e) => e.type === 'error'), 3000);
+  const ended = await Promise.race([closed.then(() => true), delay(1000).then(() => false)]);
   ws.close();
-  assert.ok(gotError, 'client heard nothing at all for 2.5 s');
+  assert.ok(gotError, 'client heard nothing at all');
+  assert.ok(ended, 'the failed session is closed, not left open');
+  assert.equal(newSessions(base).filter((s) => s.closedAt === null).length, 0, 'no upstream left waiting');
 });
 
-test('#13 the mic re-opens even if a turn never reports turnComplete', { todo: 'add a turn watchdog (PARLEY_TURN_WATCHDOG_MS here)' }, async () => {
+test('#13 the mic re-opens even if a turn never reports turnComplete', async () => {
   resetFake({ omitTurnComplete: true, replySeconds: 0.32 });
   const base = gem.sessions.length;
   const { ws } = await connect();
@@ -257,7 +269,7 @@ test('#13 the mic re-opens even if a turn never reports turnComplete', { todo: '
   assert.ok(reached, 'the mic stayed gated forever because the greeting turn never completed');
 });
 
-test('#13 a client that leaves while the upstream is still being set up does not leak the upstream session', { todo: 'stop the pending candidate when the client socket closes' }, async () => {
+test('#13 a client that leaves while the upstream is still being set up does not leak the upstream session', async () => {
   resetFake({ setupDelayMs: 400 });
   const base = gem.sessions.length;
   const { ws } = await connect();
@@ -281,6 +293,19 @@ test('#13 a second start on the same socket does not open a second upstream sess
   ws.close();
   assert.equal(newSessions(base).length, 1, 'two upstream sessions');
   assert.equal(tags.size, 1, 'two voices interleaved into one client');
+});
+
+test('#17 the turn watchdog waits for a burst-sent reply to finish playing before stepping in', async () => {
+  // gemini-3.8-live sends the audio in a burst and holds turnComplete until
+  // playback would end: 3 s of audio here, twice the 1.5 s watchdog.
+  resetFake({ burst: true, replySeconds: 3 });
+  const { ws, events } = await connect();
+  ws.send(JSON.stringify({ type: 'start' }));
+  await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 6000);
+  ws.close();
+  const finals = events.filter((e) => e.type === 'output-text' && e.final);
+  assert.equal(finals.length, 1);
+  assert.match(finals[0].text, /^Reply 1/, 'the real turnComplete (with its transcript) ended the turn, not the watchdog');
 });
 
 test('#16 reconnect backoff doubles per attempt and is capped', () => {

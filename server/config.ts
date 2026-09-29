@@ -20,6 +20,10 @@ export interface ParleyConfig {
   // Upstream reconnects allowed per /live session, and the first backoff.
   liveMaxReconnects: number;
   liveReconnectBaseMs: number;
+  // Upstream setup deadline, and how long past a reply's playback the
+  // server waits for its turnComplete before completing the turn itself.
+  liveSetupTimeoutMs: number;
+  liveTurnWatchdogMs: number;
   root: string;
 }
 
@@ -98,6 +102,8 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
     warmupEnabled: env.WARMUP !== '0',
     liveMaxReconnects: parseCount(env.PARLEY_MAX_RECONNECTS, 8),
     liveReconnectBaseMs: parseCount(env.PARLEY_RECONNECT_BASE_MS, 500),
+    liveSetupTimeoutMs: parseCount(env.PARLEY_SETUP_TIMEOUT_MS, 15000),
+    liveTurnWatchdogMs: parseCount(env.PARLEY_TURN_WATCHDOG_MS, 10000),
     root: ROOT,
   };
 }
@@ -119,6 +125,8 @@ function filterProcessEnv(): Record<string, string> {
     'WARMUP',
     'PARLEY_MAX_RECONNECTS',
     'PARLEY_RECONNECT_BASE_MS',
+    'PARLEY_SETUP_TIMEOUT_MS',
+    'PARLEY_TURN_WATCHDOG_MS',
   ];
   const out: Record<string, string> = {};
   for (const key of keys) {

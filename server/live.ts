@@ -43,6 +43,12 @@ const MAX_RECONNECTS = 8;
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 4000;
 const RECONNECT_ATTEMPTS_PER_DROP = 3;
+// No wait is unbounded (#17). A setup that never completes fails the attempt;
+// a reply whose turnComplete never arrives is completed by the server this
+// long after its audio would have finished playing, so the mic reopens.
+const SETUP_TIMEOUT_MS = 15000;
+const TURN_WATCHDOG_MS = 10000;
+const OUTPUT_BYTES_PER_MS = (24000 * 2) / 1000;
 
 // Wait before the Nth (1-based) attempt after a drop: base, 2x, 4x... capped.
 export function reconnectDelayMs(attempt: number, baseMs: number = RECONNECT_BASE_MS): number {
@@ -257,10 +263,12 @@ interface Turn {
   assistantText: string;
   startedAt: number;
   silent: boolean;
+  // When the reply audio received so far would finish playing in real time.
+  playbackEndsAt: number;
 }
 
 function freshTurn(): Turn {
-  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false };
+  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false, playbackEndsAt: 0 };
 }
 
 export interface GeminiLiveSessionOptions {
@@ -278,6 +286,8 @@ export interface GeminiLiveSessionOptions {
   log?: SessionLogger;
   maxReconnects?: number;
   reconnectBaseMs?: number;
+  setupTimeoutMs?: number;
+  turnWatchdogMs?: number;
 }
 
 export interface ReviewRequestPayload {
@@ -310,6 +320,8 @@ export class GeminiLiveSession extends EventEmitter {
   closed: boolean;
   maxReconnects: number;
   reconnectBaseMs: number;
+  setupTimeoutMs: number;
+  turnWatchdogMs: number;
   // Upstream reconnect attempts made so far, across every drop.
   reconnects: number;
   // Latest session-resumption handle from the upstream (a credential for
@@ -322,6 +334,7 @@ export class GeminiLiveSession extends EventEmitter {
   private _resumeTimer: NodeJS.Timeout | undefined;
   private _nudgeTimer: NodeJS.Timeout | undefined;
   private _reconnectTimer: NodeJS.Timeout | undefined;
+  private _watchdogTimer: NodeJS.Timeout | undefined;
   // True between setupComplete and the loss of the current upstream socket;
   // nothing may be sent upstream outside that window.
   private _upstreamReady: boolean;
@@ -349,6 +362,8 @@ export class GeminiLiveSession extends EventEmitter {
     log = noopSessionLogger,
     maxReconnects = MAX_RECONNECTS,
     reconnectBaseMs = RECONNECT_BASE_MS,
+    setupTimeoutMs = SETUP_TIMEOUT_MS,
+    turnWatchdogMs = TURN_WATCHDOG_MS,
   }: GeminiLiveSessionOptions) {
     super();
     this.apiKey = apiKey;
@@ -375,6 +390,8 @@ export class GeminiLiveSession extends EventEmitter {
     this.closed = false;
     this.maxReconnects = maxReconnects;
     this.reconnectBaseMs = reconnectBaseMs;
+    this.setupTimeoutMs = setupTimeoutMs;
+    this.turnWatchdogMs = turnWatchdogMs;
     this.reconnects = 0;
     this.resumeHandle = null;
     this.turn = freshTurn();
@@ -383,6 +400,7 @@ export class GeminiLiveSession extends EventEmitter {
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
     this._reconnectTimer = undefined;
+    this._watchdogTimer = undefined;
     this._upstreamReady = false;
     this._speakingUi = false;
     this._spokenScoreViolations = 0;
@@ -430,6 +448,17 @@ export class GeminiLiveSession extends EventEmitter {
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
       this._upstreamReady = false;
+      const setupTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.log('setup-timeout', { model: this.model, ms: this.setupTimeoutMs });
+        reject(new Error('upstream setup timed out'));
+        try {
+          ws.close();
+        } catch {
+          // already closed
+        }
+      }, this.setupTimeoutMs);
 
       ws.addEventListener('open', () => {
         ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice, resumeHandle })));
@@ -445,6 +474,7 @@ export class GeminiLiveSession extends EventEmitter {
         }
         if (msg.setupComplete && !settled) {
           settled = true;
+          clearTimeout(setupTimer);
           setupAt = Date.now();
           this._upstreamReady = true;
           this.log('upstream-ready', { model: this.model, setupMs: setupAt - connectStartedAt, resumed: Boolean(resumeHandle) });
@@ -469,6 +499,7 @@ export class GeminiLiveSession extends EventEmitter {
         this.log('upstream-error', { model: this.model, afterSetup: Boolean(setupAt) });
         if (!settled) {
           settled = true;
+          clearTimeout(setupTimer);
           reject(new Error('upstream error'));
         }
       });
@@ -484,6 +515,7 @@ export class GeminiLiveSession extends EventEmitter {
         });
         if (!settled) {
           settled = true;
+          clearTimeout(setupTimer);
           reject(new Error(`upstream closed before setup (code ${event?.code})`));
           return;
         }
@@ -532,9 +564,17 @@ export class GeminiLiveSession extends EventEmitter {
     this._giveUp('reconnect-failed');
   }
 
+  // The upstream is gone for good: stop, tell the client plainly, and let
+  // index.ts end the connection so its slot is freed (#17).
   private _giveUp(reason: string): void {
     this.log('gave-up', { reason, reconnects: this.reconnects });
-    this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
+    this.stop();
+    this._emitClient({
+      type: 'error',
+      message: 'Lost connection to the tutor. Tap the microphone to start again.',
+      code: 'upstream-closed',
+    });
+    this.emit('ended', reason);
   }
 
   private _sendPersonaTurn(): void {
@@ -547,7 +587,22 @@ export class GeminiLiveSession extends EventEmitter {
       memoryNote: this.memoryNote,
     });
     this.turn.silent = true;
-    this._sendUpstream(textUpstreamFrame(prompt));
+    this._sendTurn(prompt);
+  }
+
+  // A text turn always gets a reply, so the reply's turnComplete is awaited
+  // under the watchdog.
+  private _sendTurn(text: string): void {
+    if (this._sendUpstream(textUpstreamFrame(text))) this._armTurnWatchdog();
+  }
+
+  private _armTurnWatchdog(): void {
+    clearTimeout(this._watchdogTimer);
+    const stillToPlayMs = Math.max(0, this.turn.playbackEndsAt - Date.now());
+    this._watchdogTimer = setTimeout(() => {
+      this.log('turn-watchdog', { ms: this.turnWatchdogMs });
+      this._onTurnComplete();
+    }, stillToPlayMs + this.turnWatchdogMs);
   }
 
   private _sendUpstream(frame: GeminiUpstreamFrame): boolean {
@@ -564,9 +619,11 @@ export class GeminiLiveSession extends EventEmitter {
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._resumeTimer);
     clearTimeout(this._nudgeTimer);
+    clearTimeout(this._watchdogTimer);
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
+    this._watchdogTimer = undefined;
   }
 
   private _armThinkingTimer(): void {
@@ -590,12 +647,12 @@ export class GeminiLiveSession extends EventEmitter {
 
   sendText(text: string): void {
     this._disarmSilenceNudge();
-    this._sendUpstream(textUpstreamFrame(text));
+    this._sendTurn(text);
   }
 
   say(text: string): void {
     this.turn.silent = true;
-    this._sendUpstream(textUpstreamFrame(text));
+    this._sendTurn(text);
   }
 
   interrupt(): void {
@@ -673,6 +730,8 @@ export class GeminiLiveSession extends EventEmitter {
     for (const part of parts) {
       if (part.inlineData?.data) {
         gotAudio = true;
+        const playMs = (part.inlineData.data.length * 3) / 4 / OUTPUT_BYTES_PER_MS;
+        this.turn.playbackEndsAt = Math.max(this.turn.playbackEndsAt, Date.now()) + playMs;
         this._emitClient({ type: 'audio', data: part.inlineData.data });
       }
     }
@@ -684,6 +743,7 @@ export class GeminiLiveSession extends EventEmitter {
       }
       this.gate.onAssistantAudio();
     }
+    if (gotAudio || sc.outputTranscription?.text) this._armTurnWatchdog();
 
     if (sc.inputTranscription?.text) {
       this._disarmSilenceNudge();
@@ -704,6 +764,7 @@ export class GeminiLiveSession extends EventEmitter {
     const { userText, assistantText, startedAt, silent } = this.turn;
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
+    clearTimeout(this._watchdogTimer);
     this._speakingUi = false;
 
     this._emitClient({ type: 'input-text', text: userText, final: true });
