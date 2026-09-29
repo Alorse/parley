@@ -11,7 +11,7 @@ import { JsonStore } from './store.js';
 import { warmUp } from './warmup.js';
 import { createSessionLogger, newSessionId } from './session-log.js';
 import { compressed, etagMatches, negotiateEncoding, worthCompressing } from './compress.js';
-import { encodeServerMessage, parseClientFrame, type LiveEventMessage } from './protocol.js';
+import { encodeServerMessage, parseClientFrame, type LiveEventMessage, type ServerMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
 const store = new JsonStore(path.join(config.root, config.dataDir));
@@ -198,6 +198,9 @@ wss.on('connection', (ws) => {
   // Set from `start`: false for a stale cached client that only speaks
   // JSON/base64 audio (#24).
   let binaryAudio = false;
+  const send = (message: ServerMessage) => {
+    if (ws.readyState === ws.OPEN) ws.send(encodeServerMessage(message, binaryAudio));
+  };
 
   // Frees this connection's MAX_SESSIONS slot exactly once, as soon as the
   // session is known to be over rather than when the close handshake ends.
@@ -218,7 +221,7 @@ wss.on('connection', (ws) => {
 
   // Tells the client why the server is ending the conversation, then ends it.
   const closeWithError = (code: string, message: string) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'error', message, code }));
+    send({ type: 'error', message, code });
     endConnection(code);
   };
 
@@ -273,9 +276,7 @@ wss.on('connection', (ws) => {
       // upstream and interleave two voices into one client.
       if (started) {
         log('start-rejected', { reason: 'already-started' });
-        if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ type: 'error', message: 'This conversation has already started.', code: 'already-started' }));
-        }
+        send({ type: 'error', message: 'This conversation has already started.', code: 'already-started' });
         return;
       }
       started = true;
@@ -328,7 +329,7 @@ wss.on('connection', (ws) => {
           // Only the running transcript is speech arriving; the final copy
           // is re-sent at every turn end, the tutor's own turns included.
           if (clientMsg.type === 'input-text' && !clientMsg.final) noteActivity();
-          if (ws.readyState === ws.OPEN) ws.send(encodeServerMessage(clientMsg, binaryAudio));
+          send(clientMsg);
         });
 
         candidate.on('review-request', async (turn: ReviewRequestPayload) => {
@@ -336,12 +337,10 @@ wss.on('connection', (ws) => {
             const result = await review({ ...turn, apiKey: config.googleApiKey, models: TEXT_MODELS });
             if (result.corrections.length > 0) candidate.armSilenceNudge();
             if (result.name) candidate.setLearnerName(result.name);
-            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'review', ...result }));
+            send({ type: 'review', ...result });
           } catch (err) {
             console.error('review failed:', errorMessage(err));
-            if (ws.readyState === ws.OPEN) {
-              ws.send(JSON.stringify({ type: 'review', error: 'Review is unavailable right now.' }));
-            }
+            send({ type: 'review', error: 'Review is unavailable right now.' });
           }
         });
 

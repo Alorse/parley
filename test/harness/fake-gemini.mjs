@@ -25,8 +25,8 @@ export function sessionTag(sessionId) {
 }
 
 // Reads the tag back out of a base64 PCM16 chunk (first sample).
-export function tagOfChunk(base64) {
-  const buf = Buffer.from(base64, 'base64');
+export function tagOfChunk(chunk) {
+  const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'base64');
   return buf.length >= 2 ? buf.readInt16LE(0) : 0;
 }
 

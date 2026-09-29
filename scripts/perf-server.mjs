@@ -38,9 +38,9 @@ function procStat(pid) {
 
 const loud = Buffer.alloc(1024);
 for (let i = 0; i < loud.length; i += 2) loud.writeInt16LE(i % 4 ? 6000 : -6000, i);
-const frame = (pcm) => (BINARY ? pcm : JSON.stringify({ type: 'audio', data: pcm.toString('base64') }));
-const LOUD = frame(loud);
-const QUIET = frame(Buffer.alloc(1024));
+const toWire = (pcm) => (BINARY ? pcm : JSON.stringify({ type: 'audio', data: pcm.toString('base64') }));
+const LOUD = toWire(loud);
+const QUIET = toWire(Buffer.alloc(1024));
 
 async function run(n) {
   const gem = await startFakeGemini({ replySeconds: 3, burst: true, firstAudioDelayMs: 600 });
@@ -59,9 +59,9 @@ async function run(n) {
       });
       await new Promise((r) => ws.once('open', r));
       ws.send(JSON.stringify({ type: 'start', binary: BINARY }));
-      let n = 0;
+      let frame = 0;
       const iv = setInterval(() => {
-        const f = n++ % 94 < 31 ? LOUD : QUIET;
+        const f = frame++ % 94 < 31 ? LOUD : QUIET;
         sentBytes += f.length;
         ws.send(f);
       }, 32);

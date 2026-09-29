@@ -62,13 +62,12 @@ async function connect() {
   const ws = new WebSocket(srv.wsUrl);
   const events = [];
   ws.on('message', (raw, isBinary) => {
-    if (isBinary) {
-      events.push({ at: Date.now(), type: 'audio', binary: true, tag: raw.readInt16LE(0), bytes: raw.length });
-      return;
+    const m = isBinary ? { type: 'audio' } : JSON.parse(raw.toString());
+    if (m.type === 'audio') {
+      const pcm = isBinary ? raw : Buffer.from(m.data, 'base64');
+      Object.assign(m, { binary: isBinary, tag: tagOfChunk(pcm), bytes: pcm.length, wire: raw.length, data: undefined });
     }
-    const m = JSON.parse(raw.toString());
-    const audio = m.type === 'audio' ? { binary: false, tag: tagOfChunk(m.data), bytes: Buffer.from(m.data, 'base64').length, data: undefined } : {};
-    events.push({ at: Date.now(), ...m, ...audio });
+    events.push({ at: Date.now(), ...m });
   });
   await new Promise((resolve, reject) => {
     ws.once('open', resolve);
@@ -85,15 +84,13 @@ const LOUD_PCM = (() => {
   return b;
 })();
 const QUIET_PCM = Buffer.alloc(1024);
-const LOUD_FRAME = LOUD_PCM.toString('base64');
-const QUIET_FRAME = QUIET_PCM.toString('base64');
 
 // One mic chunk as the current app sends it (binary) or an older one (JSON).
 const micFrame = (pcm, binary) => (binary ? pcm : JSON.stringify({ type: 'audio', data: pcm.toString('base64') }));
 
-function streamMic(ws, ms = 32, binary = false) {
+function streamMic(ws, ms = 32) {
   const iv = setInterval(() => {
-    if (ws.readyState === ws.OPEN) ws.send(micFrame(LOUD_PCM, binary));
+    if (ws.readyState === ws.OPEN) ws.send(micFrame(LOUD_PCM, false));
   }, ms);
   return () => clearInterval(iv);
 }
@@ -109,7 +106,7 @@ for (const binary of [true, false]) {
     resetFake();
     const base = gem.sessions.length;
     const { ws, events } = await connect();
-    ws.send(JSON.stringify({ type: 'start', ...(binary ? { binary } : {}) }));
+    ws.send(JSON.stringify({ type: 'start', binary }));
     assert.ok(await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening')), 'greeting completes');
     const mine = newSessions(base);
     assert.equal(mine.length, 1);
@@ -147,19 +144,11 @@ test('#24 binary mic frames reach Gemini as the same PCM and are heard as speech
 test('#24 the same reply costs about a quarter less on the wire as binary frames than as JSON', async () => {
   const wireBytes = async (binary) => {
     resetFake();
-    const ws = new WebSocket(srv.wsUrl);
-    let audioBytes = 0;
-    let done = false;
-    ws.on('message', (raw, isBinary) => {
-      const m = isBinary ? null : JSON.parse(raw.toString());
-      if (isBinary || m.type === 'audio') audioBytes += raw.length;
-      if (m?.type === 'state' && m.value === 'listening') done = true;
-    });
-    await new Promise((resolve) => ws.once('open', resolve));
-    ws.send(JSON.stringify({ type: 'start', ...(binary ? { binary } : {}) }));
-    await waitFor(() => done);
+    const { ws, events } = await connect();
+    ws.send(JSON.stringify({ type: 'start', binary }));
+    await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
     ws.close();
-    return audioBytes;
+    return events.filter((e) => e.type === 'audio').reduce((sum, e) => sum + e.wire, 0);
   };
   const binary = await wireBytes(true);
   const json = await wireBytes(false);
@@ -572,7 +561,7 @@ test('#21 a session writes lifecycle records (open, ready, upstream drop, end) a
   assert.ok(end.reconnects >= 1);
   const text = srv.logs.join('');
   assert.ok(!text.includes('harness-fake-key'), 'the API key must never be logged');
-  assert.ok(!text.includes(LOUD_FRAME.slice(0, 64)), 'audio must never be logged');
+  assert.ok(!text.includes(LOUD_PCM.toString('base64').slice(0, 64)), 'audio must never be logged');
   assert.ok(!text.includes(PERSONA_PREFIX), 'the persona prompt must never be logged');
 });
 
@@ -584,9 +573,8 @@ test("#30 the client sees a 'thinking' state between the learner's turn and the 
   ws.send(JSON.stringify({ type: 'start' }));
   await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 4000);
   // 0.5 s of speech then continuous silence, like a real open mic.
-  const quiet = Buffer.alloc(1024).toString('base64');
   let n = 0;
-  const iv = setInterval(() => ws.send(JSON.stringify({ type: 'audio', data: n++ < 16 ? LOUD_FRAME : quiet })), 32);
+  const iv = setInterval(() => ws.send(micFrame(n++ < 16 ? LOUD_PCM : QUIET_PCM, false)), 32);
   await waitFor(() => events.filter((e) => e.type === 'state' && e.value === 'speaking').length >= 2, 3500);
   clearInterval(iv);
   ws.close();
@@ -610,7 +598,7 @@ async function echoingClient({ ms = 4000, lookaheadMs = 120, outputLatencyMs = 2
     const playMs = (m.bytes / OUTPUT_BYTES_PER_SECOND) * 1000;
     playsUntil = Math.max(playsUntil, Date.now() + lookaheadMs + outputLatencyMs) + playMs;
   });
-  ws.send(JSON.stringify({ type: 'start', ...(binary ? { binary } : {}) }));
+  ws.send(JSON.stringify({ type: 'start', binary }));
   const iv = setInterval(() => {
     if (ws.readyState === ws.OPEN) ws.send(micFrame(Date.now() < playsUntil + tailMs ? LOUD_PCM : QUIET_PCM, binary));
   }, 32);
@@ -638,7 +626,7 @@ test('#27 a turn heard only as a murmur is not scored or counted, and a real one
     ws.send(JSON.stringify({ type: 'start' }));
     await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 3000);
     let n = 0;
-    const iv = setInterval(() => ws.send(JSON.stringify({ type: 'audio', data: n++ < 10 ? LOUD_FRAME : QUIET_FRAME })), 32);
+    const iv = setInterval(() => ws.send(micFrame(n++ < 10 ? LOUD_PCM : QUIET_PCM, false)), 32);
     await waitFor(() => events.filter((e) => e.type === 'output-text' && e.final).length >= 2, 4000);
     await delay(300);
     clearInterval(iv);

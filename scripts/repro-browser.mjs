@@ -88,6 +88,7 @@ const INSTRUMENT = `(() => {
     } catch (e) {}
     return origStart.call(this, when, ...rest);
   };
+  const utf8 = new TextEncoder();
   const OrigWS = window.WebSocket;
   window.WebSocket = class extends OrigWS {
     constructor(url, ...rest) {
@@ -97,7 +98,7 @@ const INSTRUMENT = `(() => {
       this.addEventListener('open', () => (rec.opened = performance.now()));
       this.addEventListener('close', () => (rec.closed = performance.now()));
       // Payload bytes only (the WebSocket frame header adds 2-14 more).
-      const size = (d) => (typeof d === 'string' ? new TextEncoder().encode(d).length : d.byteLength ?? d.size ?? 0);
+      const size = (d) => (typeof d === 'string' ? utf8.encode(d).length : d.byteLength ?? d.size ?? 0);
       this.addEventListener('message', (e) => {
         rec.bytesReceived += size(e.data);
         try {
