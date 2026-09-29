@@ -133,7 +133,7 @@ function renderStaticIcons() {
 // --- orb + levels ----------------------------------------------------------
 
 const orb = new Orb(el('orb-canvas'));
-const micWaveform = new MicWaveform(el('waveform-canvas'));
+const micWaveform = new MicWaveform(el('waveform-canvas'), () => audioCapture.getWaveformData());
 const audioCapture = new AudioCapture();
 const audioPlayer = new AudioPlayer();
 const liveClient = new LiveClient();
@@ -144,13 +144,13 @@ orb.setLevelSource(() => {
   if (state.uiState === 'speaking') return audioPlayer.getLevel();
   return 0;
 });
-orb.start();
 
-// The mic line is only drawn while it is shown (#22).
+// The mic line is only drawn while it is on screen (#22). The orb starts
+// with the Talk screen (showScreen).
 function updateWaveformVisibility() {
   const shown = state.uiState === 'listening' && state.micOn;
   el('waveform-canvas').classList.toggle('hidden', !shown);
-  if (shown) micWaveform.start(() => audioCapture.getWaveformData());
+  if (shown && state.screen === 'talk') micWaveform.start();
   else micWaveform.stop();
 }
 
@@ -159,6 +159,7 @@ function updateWaveformVisibility() {
 function showScreen(name) {
   state.screen = name;
   orb.setVisible(name === 'talk');
+  updateWaveformVisibility();
   for (const screen of document.querySelectorAll('.screen')) {
     screen.classList.toggle('hidden', /** @type {HTMLElement} */ (screen).dataset.screen !== name);
   }

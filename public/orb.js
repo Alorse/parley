@@ -29,6 +29,12 @@ const BASE_LOBES = [1.0, 0.7, 1.16, 0.82, 1.05, 0.62, 0.93];
 // waiting, not by drawing nothing, so the phone's main thread can sleep.
 const IDLE_FRAME_MS = 50;
 const REDUCED_MOTION_FRAME_MS = 100;
+// A frame's time step is capped so a stall doesn't jump the shape, but
+// above the slowest pace so paced frames keep real time.
+const MAX_FRAME_SECONDS = (REDUCED_MOTION_FRAME_MS * 1.5) / 1000;
+
+// Live: MediaQueryList.matches follows the setting without a reload.
+const reducedMotionQuery = () => window.matchMedia('(prefers-reduced-motion: reduce)');
 
 function mix(c1, c2, t) {
   const a = parseInt(c1.slice(1), 16);
@@ -72,9 +78,7 @@ export class Orb {
     this.visible = true;
     /** @type {() => number} */
     this.levelSource = () => 0;
-    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    this.reducedMotion = motion.matches;
-    motion.addEventListener('change', () => (this.reducedMotion = motion.matches));
+    this.motion = reducedMotionQuery();
 
     // Per-load asymmetry: the fixed lobe shape plus a small unique jitter.
     this.lobes = BASE_LOBES.map((v) => v + (Math.random() - 0.5) * 0.1);
@@ -87,6 +91,10 @@ export class Orb {
       if (document.hidden) this.pause();
       else this.resume();
     });
+  }
+
+  get reducedMotion() {
+    return this.motion.matches;
   }
 
   _resize() {
@@ -119,9 +127,7 @@ export class Orb {
     this.lastFrame = performance.now();
     const loop = (t) => {
       if (!this.running) return;
-      // Capped so a stall doesn't jump the shape, but above the slowest
-      // frame pace so paced frames keep real time.
-      const dt = Math.min(0.15, (t - this.lastFrame) / 1000);
+      const dt = Math.min(MAX_FRAME_SECONDS, (t - this.lastFrame) / 1000);
       this.lastFrame = t;
       this._tick(dt);
       const wait = this._frameMs();
@@ -261,8 +267,11 @@ const HISTORY_LEN = 48;
 const CARRIER_CYCLES = 3;
 
 export class MicWaveform {
-  constructor(canvas) {
+  /** @param {() => Uint8Array | null} getData the mic's time-domain samples */
+  constructor(canvas, getData) {
     this.canvas = canvas;
+    this.getData = getData;
+    this.motion = reducedMotionQuery();
     this.ctx = canvas.getContext('2d');
     this.running = false;
     this.raf = null;
@@ -302,12 +311,12 @@ export class MicWaveform {
     }
   }
 
-  start(getData) {
+  start() {
     if (this.running) return;
     this.running = true;
     const loop = () => {
       if (!this.running) return;
-      this._draw(getData());
+      this._draw(this.getData());
       this.raf = requestAnimationFrame(loop);
     };
     loop();
@@ -330,7 +339,7 @@ export class MicWaveform {
     const centerY = h / 2;
     ctx.clearRect(0, 0, w, h);
 
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const reducedMotion = this.motion.matches;
 
     let rawLevel = 0;
     if (data && data.length) {

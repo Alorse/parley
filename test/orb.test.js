@@ -9,7 +9,6 @@ import { Orb, MicWaveform } from '../public/orb.js';
 let frames; // pending requestAnimationFrame callbacks
 let now;
 let reduce;
-let motionListeners;
 
 function fakeCanvas() {
   const noop = () => {};
@@ -22,7 +21,6 @@ beforeEach(() => {
   frames = new Map();
   now = 0;
   reduce = false;
-  motionListeners = [];
   let id = 0;
   globalThis.window = /** @type {any} */ ({
     devicePixelRatio: 1,
@@ -31,7 +29,6 @@ beforeEach(() => {
       get matches() {
         return reduce;
       },
-      addEventListener: (_, fn) => motionListeners.push(fn),
     }),
   });
   globalThis.document = /** @type {any} */ ({ hidden: false, addEventListener() {} });
@@ -105,9 +102,11 @@ test('with reduced motion the orb draws about 10 frames a second and keeps real 
 
 test('turning reduced motion on or off takes effect without a reload', () => {
   const orb = new Orb(fakeCanvas());
+  orb.start();
+  run(100);
   reduce = true;
-  motionListeners.forEach((fn) => fn());
-  assert.equal(orb.reducedMotion, true);
+  run(100);
+  assert.ok(run(1000) <= 11, 'paced for reduced motion');
 });
 
 test('a hidden orb draws nothing until it is shown again', () => {
@@ -129,9 +128,9 @@ test('the orb does not start drawing in a background tab', () => {
 });
 
 test('the mic line draws only between start and stop', () => {
-  const wave = new MicWaveform(fakeCanvas());
+  const wave = new MicWaveform(fakeCanvas(), () => null);
   assert.equal(run(500), 0, 'not drawn before it is shown');
-  wave.start(() => null);
+  wave.start();
   assert.ok(run(500) > 25);
   wave.stop();
   assert.equal(run(500), 0, 'not drawn once hidden again');
