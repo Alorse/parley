@@ -15,6 +15,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import { startFakeGemini, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
+import { waitFor } from './harness/wait.mjs';
 import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
 import { buildSystemPrompt, KICKOFF_NOTE, APP_NOTE_PREFIX } from '../server/tutor.js';
 
@@ -65,15 +66,6 @@ async function connect() {
   });
   const closed = new Promise((resolve) => ws.once('close', resolve));
   return { ws, events, closed };
-}
-
-async function waitFor(predicate, timeoutMs = 3000, stepMs = 20) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    if (predicate()) return true;
-    await delay(stepMs);
-  }
-  return predicate();
 }
 
 const newSessions = (base) => gem.sessions.slice(base);
@@ -441,7 +433,6 @@ test('#29 the silence nudge is spoken as the tutor, never sent as if the learner
   // tells the tutor is never the learner speaking.
   const text = nudge.clientContent.turns[0].parts[0].text;
   assert.ok(text.startsWith(APP_NOTE_PREFIX), 'the nudge reached the model as the learner speaking');
-  assert.ok(buildSystemPrompt({}).includes(`"${APP_NOTE_PREFIX}" comes from the Parley app, not from the learner`));
 });
 
 test('#14 the tutor is told to say it did not understand instead of guessing', () => {

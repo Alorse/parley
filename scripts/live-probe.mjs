@@ -25,7 +25,7 @@
 // turn and prints the median of each number.
 
 import { WebSocket } from 'ws';
-import { buildSetupFrame } from '../server/live.ts';
+import { buildSetupFrame, textUpstreamFrame, upstreamUrl } from '../server/live.ts';
 import { buildSystemPrompt, KICKOFF_NOTE } from '../server/tutor.ts';
 
 const args = process.argv.slice(2);
@@ -40,9 +40,7 @@ if (!KEY) {
   console.error('GOOGLE_API_KEY is required');
   process.exit(2);
 }
-const URL_ =
-  'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=' +
-  KEY;
+const URL_ = upstreamUrl(KEY);
 
 const OUTPUT_BYTES_PER_SECOND = 24000 * 2; // 24 kHz mono PCM16
 
@@ -120,19 +118,7 @@ async function timing() {
       if (msg.setupComplete) {
         out.setupMs = Math.round(performance.now() - t0);
         t.sentAt = performance.now();
-        ws.send(
-          JSON.stringify({
-            clientContent: {
-              turns: [
-                {
-                  role: 'user',
-                  parts: [{ text: opening.turn }],
-                },
-              ],
-              turnComplete: true,
-            },
-          }),
-        );
+        ws.send(JSON.stringify(textUpstreamFrame(opening.turn)));
         return;
       }
       const sc = msg.serverContent;
@@ -161,7 +147,6 @@ async function timing() {
 
   const audioSeconds = t.audioBytes / OUTPUT_BYTES_PER_SECOND;
   const genSeconds = t.firstAudio && t.turnComplete ? (t.turnComplete - t.firstAudio) / 1000 : NaN;
-  const sorted = [...t.chunkSizes].sort((a, b) => a - b);
   const report = {
     model: MODEL,
     persona: PERSONA,
@@ -182,8 +167,8 @@ async function timing() {
     // delay minus network and device output latency as echo margin.
     turnCompleteMinusPlaybackEndMs: Number.isFinite(genSeconds) ? Math.round((genSeconds - audioSeconds) * 1000) : null,
     audioChunks: t.chunks,
-    chunkBytesMedian: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
-    chunkBytesMax: sorted.length ? sorted[sorted.length - 1] : null,
+    chunkBytesMedian: median(t.chunkSizes),
+    chunkBytesMax: t.chunkSizes.length ? Math.max(...t.chunkSizes) : null,
     pcmBytes: t.audioBytes,
     clientWireBytesAsBase64Json: t.wireBytes,
     wireOverheadPct: t.audioBytes ? Math.round((t.wireBytes / t.audioBytes - 1) * 100) : null,
@@ -225,15 +210,17 @@ function median(xs) {
   return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
 }
 
-if (runTiming && RUNS === 1) console.log('timing:', JSON.stringify(await timing(), null, 2));
-if (runTiming && RUNS > 1) {
+if (runTiming) {
   const reports = [];
   for (let i = 0; i < RUNS; i++) {
     const r = await timing();
     reports.push(r);
-    console.log(`run ${i + 1}:`, JSON.stringify({ setup: r.connectToSetupCompleteMs, promptToFirstAudio: r.promptToFirstAudioMs, connectToFirstAudio: r.connectToFirstAudioMs, transcript: r.transcript }));
+    if (RUNS === 1) console.log('timing:', JSON.stringify(r, null, 2));
+    else console.log(`run ${i + 1}:`, JSON.stringify({ setup: r.connectToSetupCompleteMs, promptToFirstAudio: r.promptToFirstAudioMs, connectToFirstAudio: r.connectToFirstAudioMs, transcript: r.transcript }));
   }
-  const keys = ['connectToSetupCompleteMs', 'promptToFirstAudioMs', 'connectToFirstAudioMs'];
-  console.log('timing medians:', JSON.stringify({ model: MODEL, persona: PERSONA, runs: RUNS, ...Object.fromEntries(keys.map((k) => [k, median(reports.map((r) => r[k]))])) }));
+  if (RUNS > 1) {
+    const keys = ['connectToSetupCompleteMs', 'promptToFirstAudioMs', 'connectToFirstAudioMs'];
+    console.log('timing medians:', JSON.stringify({ model: MODEL, persona: PERSONA, runs: RUNS, ...Object.fromEntries(keys.map((k) => [k, median(reports.map((r) => r[k]))])) }));
+  }
 }
 if (runVariants) console.log('setup variants:', JSON.stringify(await variants(), null, 2));

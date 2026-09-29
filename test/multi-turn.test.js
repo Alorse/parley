@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GeminiLiveSession, SilenceNudge } from '../server/live.js';
 import { APP_NOTE_PREFIX } from '../server/tutor.js';
+import { waitFor } from './harness/wait.mjs';
 
 // A minimal stand-in for the upstream WebSocket, driven manually so a test
 // can script exactly what "Gemini" sends back without any network. Mirrors
@@ -211,7 +212,7 @@ test('a completed turn\'s review-request payload carries the session\'s scenario
   session.stop();
 });
 
-// --- memory note flows into the persona turn --------------------------------
+// --- memory note flows into the persona --------------------------------
 
 async function personaOf(ws) {
   await delay(0); // the setup frame goes out on the fake socket's 'open'
@@ -238,11 +239,8 @@ function textOf(frame) {
 
 const nudgesSince = (ws, from) => ws.sent.slice(from).filter((f) => textOf(f)?.includes('Take your time'));
 
-// The nudge timer is real: poll for it rather than sleeping a fixed time,
-// which missed it on a loaded machine.
-async function waitForNudge(ws, from, timeoutMs = 1000) {
-  const end = Date.now() + timeoutMs;
-  while (nudgesSince(ws, from).length === 0 && Date.now() < end) await delay(5);
+async function waitForNudge(ws, from) {
+  await waitFor(() => nudgesSince(ws, from).length > 0, 1000, 5);
   return nudgesSince(ws, from);
 }
 

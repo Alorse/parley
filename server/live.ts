@@ -32,14 +32,13 @@ export function resolveWebSocketImpl(): any {
 const UPSTREAM_BASE =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
-const INPUT_LANGUAGE = 'en-US';
 const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
 // An app note, not a learner turn: sent bare, the tutor took the nudge as
 // the learner's own words and answered them (#29). A model-role turn is
 // not an option: gemini-3.8-live stays silent after one.
-export const SILENCE_NUDGE_NOTE = appNote(
+const SILENCE_NUDGE_NOTE = appNote(
   `The learner has been quiet since your correction. Gently tell them, in your own voice, something like: "Take your time — try saying it, or we'll move on."`,
 );
 // Upstream drops were seen about every 8 minutes, so a long conversation
@@ -94,7 +93,7 @@ export function buildSetupFrame({
       // the language every turn and writes short or unclear English in other
       // scripts (#28). Accepted by gemini-3.8-live and
       // gemini-3.1-flash-live-preview (scripts/live-probe.mjs).
-      inputAudioTranscription: { languageCodes: [INPUT_LANGUAGE] },
+      inputAudioTranscription: { languageCodes: ['en-US'] },
       outputAudioTranscription: {},
       realtimeInputConfig: {
         automaticActivityDetection: {
@@ -273,8 +272,7 @@ export class SilenceNudge {
   // once disarmed, and on every call after it has already fired once — so a
   // caller can safely re-check without ever firing twice for the same arm.
   shouldFire(): boolean {
-    if (this._armedAt === null || this._fired) return false;
-    if (this._now() - this._armedAt < this.delayMs) return false;
+    if (this.msUntilDue() !== 0) return false;
     this._fired = true;
     return true;
   }
