@@ -160,8 +160,8 @@ npm test                                   # includes test/live-harness.test.js:
 node scripts/repro-browser.mjs [scenario ...]   # headless Chrome + fake mic
             # + real server + fake upstream; instruments playback buffers,
             # sockets, mic streams. Scenarios: double-tap, server-restart,
-            # end-restart, echo-window, echo-bluetooth, upstream-drop-twice,
-            # two-tabs, idle-cpu
+            # end-restart, echo-window, echo-bluetooth, screen-reader,
+            # upstream-drop-twice, two-tabs, idle-cpu
 node scripts/perf-server.mjs               # server CPU/RSS per live session (offline)
 
 # These three spend real quota — keep runs small:

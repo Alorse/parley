@@ -22,7 +22,7 @@
 // Usage:
 //   node scripts/repro-browser.mjs [scenario ...] [--port N] [--json out.json]
 // Scenarios: double-tap, server-restart, end-restart, echo-window,
-//            echo-bluetooth, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
+//            echo-bluetooth, screen-reader, upstream-drop-twice, upstream-lost, two-tabs, idle-cpu   (default: all)
 //
 // Needs Chrome/Chromium (CHROME_PATH or the usual locations). The scratch
 // server is started on a free port (or --port) and stopped by PID only.
@@ -43,7 +43,7 @@ const flag = (name) => {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
 };
-const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
+const ALL = ['double-tap', 'server-restart', 'end-restart', 'echo-window', 'echo-bluetooth', 'screen-reader', 'upstream-drop-twice', 'upstream-lost', 'two-tabs', 'idle-cpu'];
 const flagValues = new Set([flag('--port'), flag('--json')]);
 const requested = argv.filter((a) => !a.startsWith('--') && !flagValues.has(a));
 const scenarios = requested.length ? requested : ALL;
@@ -62,7 +62,7 @@ if (!CHROME) {
 // Injected before any page script. Kept dependency-free and defensive: it
 // must never change app behaviour, only observe it.
 const INSTRUMENT = `(() => {
-  const P = (window.__parley = { sources: [], sockets: [], streams: [], listening: [], listeningShown: [], states: [], rafCalls: 0, framesWhilePlaying: 0 });
+  const P = (window.__parley = { sources: [], sockets: [], streams: [], listening: [], listeningShown: [], states: [], rafCalls: 0, framesWhilePlaying: 0, srStatus: [], srLines: [] });
   // Tutor audio still to be heard on this device, in ms (negative: heard
   // that long ago), counting the device's output latency.
   const stillToPlayMs = () => {
@@ -134,6 +134,11 @@ const INSTRUMENT = `(() => {
     new MutationObserver(() => {
       if (line.textContent === 'Listening…') P.listeningShown.push(stillToPlayMs());
     }).observe(line, { childList: true, characterData: true, subtree: true });
+    // What a screen reader is given: the turn cues and the finished lines.
+    const status = document.getElementById('sr-status');
+    const log = document.getElementById('sr-transcript');
+    if (status) new MutationObserver(() => status.textContent && P.srStatus.push(status.textContent)).observe(status, { childList: true, characterData: true, subtree: true });
+    if (log) new MutationObserver((records) => records.forEach((r) => r.addedNodes.forEach((n) => P.srLines.push(n.textContent)))).observe(log, { childList: true });
   });
   const origRaf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = (cb) => { P.rafCalls++; return origRaf(cb); };
@@ -395,6 +400,33 @@ const SCENARIOS = {
   // speaker or headset; headless Chrome itself reports ~30 ms).
   async 'echo-bluetooth'() {
     return echoWindow({ outputLatencyMs: 250 });
+  },
+
+  // What a screen reader user is told during a conversation (#31): the mic
+  // button's state, a cue when the turn changes, each finished line once,
+  // and no live region over the streaming transcript.
+  async 'screen-reader'() {
+    return withRig({ replySeconds: 2, firstAudioDelayMs: 700 }, async ({ chrome, srv }) => {
+      const page = await chrome.newPage(srv.url);
+      const pressed = () => page.eval(`document.getElementById('mic-btn').getAttribute('aria-pressed')`);
+      const before = await pressed();
+      await page.click('mic-btn');
+      await sleep(18000);
+      const during = await pressed();
+      await page.click('mic-btn');
+      await sleep(300);
+      const after = await pressed();
+      const p = await page.eval(`({ srStatus: window.__parley.srStatus, srLines: window.__parley.srLines, transcriptLive: document.getElementById('transcript').getAttribute('aria-live'), micLabel: document.getElementById('mic-btn').getAttribute('aria-label') })`);
+      return {
+        expected: 'aria-pressed false/true/false, turn cues, each finished line once, transcript not live',
+        micLabel: p.micLabel,
+        micPressed: { before, during, after },
+        transcriptAriaLive: p.transcriptLive,
+        turnCues: p.srStatus,
+        linesAnnounced: p.srLines,
+        repeatedLines: p.srLines.length - new Set(p.srLines).size,
+      };
+    });
   },
 
   // Gemini drops the connection twice (observed live: close 1011 after ~8 min).
