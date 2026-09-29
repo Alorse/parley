@@ -212,16 +212,21 @@ test('a completed turn\'s review-request payload carries the session\'s scenario
 
 // --- memory note flows into the persona turn --------------------------------
 
-test('a session with a memoryNote weaves it into the persona turn sent upstream', async () => {
-  const { ws } = await startSession({ memoryNote: 'talked about the weekend; the past tense was hard' });
-  const personaFrame = ws.sent[0];
-  assert.match(personaFrame.clientContent.turns[0].parts[0].text, /talked about the weekend; the past tense was hard/);
+async function personaOf(ws) {
+  await delay(0); // the setup frame goes out on the fake socket's 'open'
+  return ws.sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
+}
+
+test('a session with a memoryNote weaves it into the persona sent upstream', async () => {
+  const { session, ws } = await startSession({ memoryNote: 'talked about the weekend; the past tense was hard' });
+  assert.match(await personaOf(ws), /talked about the weekend; the past tense was hard/);
+  session.stop();
 });
 
 test('a session with no memoryNote mentions nothing about a remembered conversation', async () => {
-  const { ws } = await startSession();
-  const personaFrame = ws.sent[0];
-  assert.doesNotMatch(personaFrame.clientContent.turns[0].parts[0].text, /remember this from earlier conversations/i);
+  const { session, ws } = await startSession();
+  assert.doesNotMatch(await personaOf(ws), /remember this from earlier conversations/i);
+  session.stop();
 });
 
 // --- anti-freeze silence nudge, wired through a real session ----------------

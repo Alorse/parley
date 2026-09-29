@@ -380,7 +380,7 @@ const SCENARIOS = {
       const health = await (await fetch(`${srv.url}/api/health`)).json();
       return {
         expected: 'recover, or end the session clearly (socket closed, mic off); never keep streaming into nothing',
-        personaPromptsSent: gem.sessions.map((s) => s.textTurns.filter((t) => t.text.startsWith('You are Parley')).length),
+        kickoffTurnsSent: gem.sessions.map((s) => s.textTurns.filter((t) => t.text.includes('opened the app')).length),
         resumptionHandleUsedOnReconnect: Boolean(gem.sessions[1]?.setup?.sessionResumption?.handle),
         afterFirstDrop: { status: afterFirst.status, error: afterFirst.error },
         afterSecondDrop: {

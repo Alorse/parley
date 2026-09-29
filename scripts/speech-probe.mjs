@@ -25,8 +25,9 @@
 //   --hint         adds an English language hint to the setup (input
 //                  transcription languageCodes + speechConfig.languageCode)
 //                  to test whether it keeps the transcript in English
-//   --system       sends the persona as setup.systemInstruction instead of a
-//                  user turn (+ a short "start" user turn)
+//   --legacy       sends the persona as the first user turn, as Parley did
+//                  before #23 (default: Parley's setup, persona as
+//                  systemInstruction plus the kickoff app note)
 //   --prompt-file  replaces the persona prompt with the file's content (to
 //                  try a revised prompt without editing server code)
 //   --trace        also print the sequence of upstream message kinds
@@ -36,7 +37,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { buildSetupFrame, textUpstreamFrame, audioUpstreamFrame, upstreamUrl } from '../server/live.ts';
-import { buildSystemPrompt } from '../server/tutor.ts';
+import { buildSystemPrompt, KICKOFF_NOTE } from '../server/tutor.ts';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const KEY = process.env.GOOGLE_API_KEY;
@@ -48,7 +49,7 @@ if (!KEY) {
 
 const argv = process.argv.slice(2);
 const HINT = argv.includes('--hint');
-const SYSTEM = argv.includes('--system');
+const LEGACY = argv.includes('--legacy');
 const TRACE = argv.includes('--trace');
 const pfIdx = argv.indexOf('--prompt-file');
 const PROMPT_FILE = pfIdx !== -1 ? argv[pfIdx + 1] : null;
@@ -158,13 +159,12 @@ async function buildVariant(name) {
 }
 
 function setupFrame(prompt) {
-  const frame = buildSetupFrame({ model: MODEL, voice: 'Kore' });
+  const frame = buildSetupFrame({ model: MODEL, voice: 'Kore', persona: LEGACY ? '' : prompt });
   const s = /** @type {any} */ (frame.setup);
   if (HINT) {
     s.inputAudioTranscription = { languageCodes: ['en-US'] };
     s.generationConfig.speechConfig.languageCode = 'en-US';
   }
-  if (SYSTEM) s.systemInstruction = { parts: [{ text: prompt }] };
   return frame;
 }
 
@@ -172,7 +172,7 @@ function runVariant(name, variant) {
   const prompt = PROMPT_FILE ? readFileSync(PROMPT_FILE, 'utf8') : buildSystemPrompt({ scenario: 'Just talk', level: 'B1', learnerName: 'Ana' });
   return new Promise((resolve) => {
     const ws = new WebSocket(upstreamUrl(KEY));
-    const out = { variant: name, hint: HINT, system: SYSTEM, greeting: '', heard: '', reply: '', interrupted: false, error: null, frames: [] };
+    const out = { variant: name, model: MODEL, hint: HINT, legacy: LEGACY, greeting: '', heard: '', reply: '', interrupted: false, error: null, frames: [] };
     let phase = 'setup';
     const timer = setTimeout(() => {
       out.error = `timeout in phase ${phase}`;
@@ -186,7 +186,7 @@ function runVariant(name, variant) {
       if (kind) out.frames.push(`${phase}:${kind}`);
       if (msg.setupComplete) {
         phase = 'greeting';
-        ws.send(JSON.stringify(textUpstreamFrame(SYSTEM ? 'Hi.' : prompt)));
+        ws.send(JSON.stringify(textUpstreamFrame(LEGACY ? prompt : KICKOFF_NOTE)));
         return;
       }
       const sc = msg.serverContent;

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket as WsWebSocket } from 'ws';
-import { buildSystemPrompt } from './tutor.js';
+import { buildSystemPrompt, KICKOFF_NOTE } from './tutor.js';
 import { cleanReason, noopSessionLogger, type SessionLogger } from './session-log.js';
 import type {
   ClientMessage,
@@ -63,14 +63,20 @@ export function buildSetupFrame({
   model,
   voice,
   resumeHandle = null,
+  persona = '',
 }: {
   model: string;
   voice: string;
   resumeHandle?: string | null;
+  persona?: string;
 }): GeminiSetupFrame {
   return {
     setup: {
       model: `models/${model}`,
+      // The persona as standing instructions, not as the learner's first
+      // message: the tutor starts speaking sooner and never mistakes its own
+      // instructions for something the learner said (#23, #26).
+      ...(persona ? { systemInstruction: { parts: [{ text: persona }] } } : {}),
       // Always on, so the upstream keeps sending sessionResumptionUpdate
       // handles; with a handle this setup continues that conversation.
       sessionResumption: resumeHandle ? { handle: resumeHandle } : {},
@@ -328,7 +334,7 @@ export class GeminiLiveSession extends EventEmitter {
   // the conversation: never logged).
   resumeHandle: string | null;
   turn: Turn;
-  // Learner turns only (silent persona/say turns excluded); lifecycle logging.
+  // Learner turns only (silent kickoff/say turns excluded); lifecycle logging.
   turnsCompleted: number;
   private _thinkingTimer: NodeJS.Timeout | undefined;
   private _resumeTimer: NodeJS.Timeout | undefined;
@@ -379,7 +385,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.log = log;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
     this.nudge = new SilenceNudge();
-    // The persona/greeting turn is sent as soon as setup completes, before
+    // The kickoff/greeting turn is sent as soon as setup completes, before
     // the learner has said anything. Close the mic gate immediately so any
     // audio the client streams while getUserMedia/connect is still settling
     // can't reach upstream and collide with that first turn's boundaries —
@@ -429,8 +435,9 @@ export class GeminiLiveSession extends EventEmitter {
 
   // Opens one upstream socket and resolves once its setup completes. Given a
   // resumption handle, the upstream restores the conversation it belongs to,
-  // so the persona turn is NOT sent again — resending it is what made the
-  // tutor greet the learner a second time with no memory of the talk (#16).
+  // so the kickoff turn is NOT sent again — a fresh opening turn is what made
+  // the tutor greet the learner a second time with no memory of the talk (#16).
+  // The persona goes in every setup, resumed or not.
   private _connect(resumeHandle: string | null): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -467,7 +474,7 @@ export class GeminiLiveSession extends EventEmitter {
       }, this.setupTimeoutMs);
 
       ws.addEventListener('open', () => {
-        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice, resumeHandle })));
+        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice, resumeHandle, persona: this._persona() })));
       });
 
       ws.addEventListener('message', (event: any) => {
@@ -488,10 +495,10 @@ export class GeminiLiveSession extends EventEmitter {
             // to the learner.
             this._reopenMic();
           } else {
-            // No 'listening' state here: the persona turn is already in
+            // No 'listening' state here: the kickoff turn is already in
             // flight and will produce 'speaking' once its audio starts, then
             // 'listening' once that greeting turn completes.
-            this._sendPersonaTurn();
+            this._sendKickoffTurn();
           }
           resolve();
           return;
@@ -577,8 +584,9 @@ export class GeminiLiveSession extends EventEmitter {
     this.emit('ended', reason);
   }
 
-  private _sendPersonaTurn(): void {
-    const prompt = buildSystemPrompt({
+  // Built per setup, so a resumed session picks up a name learned meanwhile.
+  private _persona(): string {
+    return buildSystemPrompt({
       scenario: this.scenario,
       level: this.level,
       nativeLanguage: this.nativeLanguage,
@@ -586,8 +594,11 @@ export class GeminiLiveSession extends EventEmitter {
       learnerName: this.learnerName,
       memoryNote: this.memoryNote,
     });
+  }
+
+  private _sendKickoffTurn(): void {
     this.turn.silent = true;
-    this._sendTurn(prompt);
+    this._sendTurn(KICKOFF_NOTE);
   }
 
   // A text turn always gets a reply, so the reply's turnComplete is awaited
