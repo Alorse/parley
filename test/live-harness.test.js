@@ -16,7 +16,7 @@ import { WebSocket } from 'ws';
 import { startFakeGemini, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
 import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
-import { buildSystemPrompt, KICKOFF_NOTE } from '../server/tutor.js';
+import { buildSystemPrompt, KICKOFF_NOTE, APP_NOTE_PREFIX } from '../server/tutor.js';
 
 const PERSONA_PREFIX = 'You are Parley';
 const kickoffs = (s) => s.textTurns.filter((t) => t.text === KICKOFF_NOTE).length;
@@ -422,7 +422,7 @@ class TextOnlyUpstream extends EventTarget {
 }
 TextOnlyUpstream.OPEN = 1;
 
-test('#14 the silence nudge is spoken as the tutor, never sent as if the learner had said it', { todo: 'the nudge is sent as a user turn today' }, async () => {
+test('#29 the silence nudge is spoken as the tutor, never sent as if the learner had said it', async () => {
   const session = new GeminiLiveSession({ apiKey: 'k', model: 'm', voice: 'Kore', webSocketImpl: TextOnlyUpstream });
   const started = session.start();
   const up = session.ws;
@@ -432,11 +432,16 @@ test('#14 the silence nudge is spoken as the tutor, never sent as if the learner
   await started;
   session.nudge.delayMs = 10;
   session.armSilenceNudge();
-  await delay(40);
+  await waitFor(() => up.sent.some((f) => JSON.stringify(f).includes('Take your time')), 1000, 5);
   session.stop();
   const nudge = up.sent.find((f) => JSON.stringify(f).includes('Take your time'));
   assert.ok(nudge, 'nudge was sent');
-  assert.notEqual(nudge.clientContent?.turns?.[0]?.role, 'user', 'the nudge reached the model as the learner speaking');
+  // A model-role turn would be the literal fix, but gemini-3.8-live stays
+  // silent after one (checked live), so the nudge is an app note the persona
+  // tells the tutor is never the learner speaking.
+  const text = nudge.clientContent.turns[0].parts[0].text;
+  assert.ok(text.startsWith(APP_NOTE_PREFIX), 'the nudge reached the model as the learner speaking');
+  assert.ok(buildSystemPrompt({}).includes(`"${APP_NOTE_PREFIX}" comes from the Parley app, not from the learner`));
 });
 
 test('#14 the tutor is told to say it did not understand instead of guessing', () => {

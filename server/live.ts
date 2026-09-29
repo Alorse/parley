@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket as WsWebSocket } from 'ws';
-import { buildSystemPrompt, KICKOFF_NOTE } from './tutor.js';
+import { appNote, buildSystemPrompt, KICKOFF_NOTE } from './tutor.js';
 import { cleanReason, noopSessionLogger, type SessionLogger } from './session-log.js';
 import type {
   ClientMessage,
@@ -36,7 +36,12 @@ const INPUT_LANGUAGE = 'en-US';
 const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
-const SILENCE_NUDGE_TEXT = "Take your time — try saying it, or we'll move on.";
+// An app note, not a learner turn: sent bare, the tutor took the nudge as
+// the learner's own words and answered them (#29). A model-role turn is
+// not an option: gemini-3.8-live stays silent after one.
+export const SILENCE_NUDGE_NOTE = appNote(
+  `The learner has been quiet since your correction. Gently tell them, in your own voice, something like: "Take your time — try saying it, or we'll move on."`,
+);
 // Upstream drops were seen about every 8 minutes, so a long conversation
 // needs several resumes; the cap only stops a flapping upstream from looping
 // forever. Each drop gets a few attempts with exponential backoff.
@@ -509,7 +514,7 @@ export class GeminiLiveSession extends EventEmitter {
             // No 'listening' state here: the kickoff turn is already in
             // flight and will produce 'speaking' once its audio starts, then
             // 'listening' once that greeting turn completes.
-            this._sendKickoffTurn();
+            this.say(KICKOFF_NOTE);
           }
           resolve();
           return;
@@ -607,11 +612,6 @@ export class GeminiLiveSession extends EventEmitter {
     });
   }
 
-  private _sendKickoffTurn(): void {
-    this.turn.silent = true;
-    this._sendTurn(KICKOFF_NOTE);
-  }
-
   // A text turn always gets a reply, so the reply's turnComplete is awaited
   // under the watchdog.
   private _sendTurn(text: string): void {
@@ -672,6 +672,8 @@ export class GeminiLiveSession extends EventEmitter {
     this._sendTurn(text);
   }
 
+  // A turn the tutor answers that is not reviewed or counted as a learner
+  // turn: the client's hint/scenario requests and the server's app notes.
   say(text: string): void {
     this.turn.silent = true;
     this._sendTurn(text);
@@ -692,8 +694,8 @@ export class GeminiLiveSession extends EventEmitter {
   // detection never starts a new upstream turn on its own — nothing else in
   // this session would ever speak again — so this is what keeps the
   // conversation from freezing after the pace change in Part 1. Fires at
-  // most once per arm (SilenceNudge.shouldFire), and only speaks via say(),
-  // which is already silent (no review, no score history pollution).
+  // most once per arm (SilenceNudge.shouldFire), and is sent via say() as an
+  // app note (no review, no score history pollution).
   armSilenceNudge(): void {
     this.nudge.arm();
     this._scheduleNudge(this.nudge.delayMs);
@@ -705,7 +707,7 @@ export class GeminiLiveSession extends EventEmitter {
     clearTimeout(this._nudgeTimer);
     this._nudgeTimer = setTimeout(() => {
       if (this.nudge.shouldFire()) {
-        this.say(SILENCE_NUDGE_TEXT);
+        this.say(SILENCE_NUDGE_NOTE);
         return;
       }
       const left = this.nudge.msUntilDue();

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { GeminiLiveSession, SilenceNudge } from '../server/live.js';
+import { APP_NOTE_PREFIX } from '../server/tutor.js';
 
 // A minimal stand-in for the upstream WebSocket, driven manually so a test
 // can script exactly what "Gemini" sends back without any network. Mirrors
@@ -258,6 +259,7 @@ test('armSilenceNudge speaks the nudge via say() if the learner stays silent', a
   const nudgeFrames = await waitForNudge(ws, sentBeforeNudge);
   await delay(60);
   assert.equal(nudgesSince(ws, sentBeforeNudge).length, 1, 'the nudge text was sent upstream exactly once');
+  assert.ok(textOf(nudgeFrames[0]).startsWith(APP_NOTE_PREFIX), 'sent as an app note, not as the learner speaking');
 
   session.stop();
 });
