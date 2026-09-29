@@ -9,6 +9,7 @@ import { review, type ReviewParams } from './review.js';
 import { translate, hint, type TranslateParams, type HintParams } from './translate.js';
 import { JsonStore } from './store.js';
 import { warmUp } from './warmup.js';
+import { createSessionLogger, newSessionId } from './session-log.js';
 import type { ClientMessage, LiveEventMessage } from './protocol.js';
 
 const PUBLIC_DIR = path.join(config.root, 'public');
@@ -157,15 +158,43 @@ interface StoredProfile {
 }
 
 wss.on('connection', (ws) => {
+  const sid = newSessionId();
+  const log = createSessionLogger(sid);
   if (activeSessions >= config.maxSessions) {
+    log('busy', { active: activeSessions, max: config.maxSessions });
     ws.send(JSON.stringify({ type: 'error', message: 'Parley is busy right now — try again in a minute.', code: 'busy' }));
     ws.close();
     return;
   }
 
   activeSessions += 1;
+  const openedAt = Date.now();
+  log('open', { active: activeSessions, max: config.maxSessions });
   let session: GeminiLiveSession | null = null;
+  // The candidate whose upstream setup is in flight, so a client that leaves
+  // mid-setup doesn't leave it running (and greeting nobody).
+  let pending: GeminiLiveSession | null = null;
+  let started = false;
+  let released = false;
+  let endReason = 'client-closed';
   let alive = true;
+
+  // Frees this connection's MAX_SESSIONS slot exactly once, as soon as the
+  // session is known to be over rather than when the close handshake ends.
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeSessions -= 1;
+  };
+
+  // The server ends the conversation (the client was already sent an error
+  // saying why): free the slot now and close the socket so the client stops
+  // its mic instead of streaming into nothing (#17).
+  const endConnection = (reason: string) => {
+    endReason = reason;
+    release();
+    if (ws.readyState === ws.OPEN) ws.close(1011, reason);
+  };
 
   const pingInterval = setInterval(() => {
     if (!alive) {
@@ -189,6 +218,16 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'start') {
+      // One conversation per socket: a second start would open a second
+      // upstream and interleave two voices into one client.
+      if (started) {
+        log('start-rejected', { reason: 'already-started' });
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: 'error', message: 'This conversation has already started.', code: 'already-started' }));
+        }
+        return;
+      }
+      started = true;
       const profile = store.read<StoredProfile>('profile', {});
       const scenario = msg.scenario ?? profile.scenario ?? 'Just talk';
       const level = msg.level ?? profile.level ?? 'B1';
@@ -208,7 +247,9 @@ wss.on('connection', (ws) => {
       // shouldn't take the whole session down. Listeners must be attached
       // before start() so we never miss the initial 'ready'/greeting audio.
       let lastError: unknown;
+      log('start', { level, voice, halfDuplex, feedbackDetail });
       for (const liveModel of LIVE_MODELS) {
+        if (ws.readyState !== ws.OPEN) break;
         const candidate = new GeminiLiveSession({
           apiKey: config.googleApiKey,
           model: liveModel,
@@ -219,6 +260,11 @@ wss.on('connection', (ws) => {
           feedbackDetail,
           learnerName: name,
           memoryNote,
+          log,
+          maxReconnects: config.liveMaxReconnects,
+          reconnectBaseMs: config.liveReconnectBaseMs,
+          setupTimeoutMs: config.liveSetupTimeoutMs,
+          turnWatchdogMs: config.liveTurnWatchdogMs,
         });
 
         candidate.on('client', (clientMsg: LiveEventMessage) => {
@@ -239,23 +285,32 @@ wss.on('connection', (ws) => {
           }
         });
 
+        candidate.on('ended', (reason: string) => endConnection(`upstream-${reason}`));
+
+        pending = candidate;
         try {
           await candidate.start();
-          session = candidate;
           lastError = null;
-          break;
         } catch (err) {
           lastError = err;
           candidate.stop();
-          console.error(`live session failed to start with model ${liveModel}:`, errorMessage(err));
+          log('start-failed', { model: liveModel, error: errorMessage(err) });
+          continue;
+        } finally {
+          pending = null;
         }
+        if (ws.readyState !== ws.OPEN) {
+          candidate.stop();
+          return;
+        }
+        session = candidate;
+        break;
       }
 
-      if (!session) {
-        console.error('live session failed to start on every model fallback:', lastError ? errorMessage(lastError) : undefined);
-        if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Could not reach the tutor right now.' }));
-        }
+      if (!session && ws.readyState === ws.OPEN) {
+        log('start-failed-all', { error: lastError ? errorMessage(lastError) : null });
+        ws.send(JSON.stringify({ type: 'error', message: 'Could not reach the tutor right now. Tap the microphone to try again.' }));
+        endConnection('start-failed');
       }
       return;
     }
@@ -269,10 +324,20 @@ wss.on('connection', (ws) => {
     else if (msg.type === 'stop') session.stop();
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     alive = false;
     clearInterval(pingInterval);
-    activeSessions -= 1;
+    release();
+    if (pending) pending.stop();
+    log('end', {
+      reason: endReason,
+      clientCode: code,
+      durationMs: Date.now() - openedAt,
+      model: session?.model,
+      turns: session?.turnsCompleted ?? 0,
+      reconnects: session?.reconnects ?? 0,
+      active: activeSessions,
+    });
     if (session) session.stop();
   });
 });

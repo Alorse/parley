@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { MAX_RECONNECTS, RECONNECT_BASE_MS, SETUP_TIMEOUT_MS, TURN_WATCHDOG_MS } from './live.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ENV_PATH = path.join(ROOT, '.env');
@@ -17,7 +18,20 @@ export interface ParleyConfig {
   dataDir: string;
   maxSessions: number;
   warmupEnabled: boolean;
+  // Upstream reconnects allowed per /live session, and the first backoff.
+  liveMaxReconnects: number;
+  liveReconnectBaseMs: number;
+  // Upstream setup deadline, and how long past a reply's playback the
+  // server waits for its turnComplete before completing the turn itself.
+  liveSetupTimeoutMs: number;
+  liveTurnWatchdogMs: number;
   root: string;
+}
+
+// Non-negative integer from the env, or the default when unset/invalid.
+function parseCount(value: string | undefined, fallback: number): number {
+  const n = Number(value);
+  return value !== undefined && value !== '' && Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
 /**
@@ -87,6 +101,10 @@ export function buildConfig(env: Record<string, string> = { ...loadEnvFile(), ..
     dataDir: env.DATA_DIR || '.data',
     maxSessions: Number(env.MAX_SESSIONS) || 4,
     warmupEnabled: env.WARMUP !== '0',
+    liveMaxReconnects: parseCount(env.PARLEY_MAX_RECONNECTS, MAX_RECONNECTS),
+    liveReconnectBaseMs: parseCount(env.PARLEY_RECONNECT_BASE_MS, RECONNECT_BASE_MS),
+    liveSetupTimeoutMs: parseCount(env.PARLEY_SETUP_TIMEOUT_MS, SETUP_TIMEOUT_MS),
+    liveTurnWatchdogMs: parseCount(env.PARLEY_TURN_WATCHDOG_MS, TURN_WATCHDOG_MS),
     root: ROOT,
   };
 }
@@ -106,6 +124,10 @@ function filterProcessEnv(): Record<string, string> {
     'DATA_DIR',
     'MAX_SESSIONS',
     'WARMUP',
+    'PARLEY_MAX_RECONNECTS',
+    'PARLEY_RECONNECT_BASE_MS',
+    'PARLEY_SETUP_TIMEOUT_MS',
+    'PARLEY_TURN_WATCHDOG_MS',
   ];
   const out: Record<string, string> = {};
   for (const key of keys) {

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { WebSocket as WsWebSocket } from 'ws';
 import { buildSystemPrompt } from './tutor.js';
+import { cleanReason, noopSessionLogger, type SessionLogger } from './session-log.js';
 import type {
   ClientMessage,
   GeminiAudioUpstreamFrame,
@@ -35,15 +36,44 @@ const TAIL_GUARD_MS = 400;
 const THINKING_DELAY_MS = 500;
 const SILENCE_NUDGE_DELAY_MS = 6000;
 const SILENCE_NUDGE_TEXT = "Take your time — try saying it, or we'll move on.";
+// Upstream drops were seen about every 8 minutes, so a long conversation
+// needs several resumes; the cap only stops a flapping upstream from looping
+// forever. Each drop gets a few attempts with exponential backoff.
+export const MAX_RECONNECTS = 8;
+export const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 4000;
+const RECONNECT_ATTEMPTS_PER_DROP = 3;
+// No wait is unbounded (#17). A setup that never completes fails the attempt;
+// a reply whose turnComplete never arrives is completed by the server this
+// long after its audio would have finished playing, so the mic reopens.
+export const SETUP_TIMEOUT_MS = 15000;
+export const TURN_WATCHDOG_MS = 10000;
+const OUTPUT_BYTES_PER_MS = (24000 * 2) / 1000;
+
+// Wait before the Nth (1-based) attempt after a drop: base, 2x, 4x... capped.
+export function reconnectDelayMs(attempt: number, baseMs: number = RECONNECT_BASE_MS): number {
+  return Math.min(baseMs * 2 ** (attempt - 1), RECONNECT_MAX_DELAY_MS);
+}
 
 export function upstreamUrl(apiKey: string): string {
   return `${UPSTREAM_BASE}?key=${apiKey}`;
 }
 
-export function buildSetupFrame({ model, voice }: { model: string; voice: string }): GeminiSetupFrame {
+export function buildSetupFrame({
+  model,
+  voice,
+  resumeHandle = null,
+}: {
+  model: string;
+  voice: string;
+  resumeHandle?: string | null;
+}): GeminiSetupFrame {
   return {
     setup: {
       model: `models/${model}`,
+      // Always on, so the upstream keeps sending sessionResumptionUpdate
+      // handles; with a handle this setup continues that conversation.
+      sessionResumption: resumeHandle ? { handle: resumeHandle } : {},
       generationConfig: {
         responseModalities: ['AUDIO'],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
@@ -155,6 +185,12 @@ export class HalfDuplexGate {
     this._resumeAt = Infinity;
   }
 
+  // Closed until the next onTurnComplete/onInterrupted, like while the
+  // assistant speaks: used while the upstream is being re-established.
+  hold(): void {
+    this.onAssistantAudio();
+  }
+
   onTurnComplete(): void {
     this._speaking = false;
     this._resumeAt = this._now() + this.tailGuardMs;
@@ -227,10 +263,12 @@ interface Turn {
   assistantText: string;
   startedAt: number;
   silent: boolean;
+  // When the reply audio received so far would finish playing in real time.
+  playbackEndsAt: number;
 }
 
 function freshTurn(): Turn {
-  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false };
+  return { userText: '', assistantText: '', startedAt: Date.now(), silent: false, playbackEndsAt: 0 };
 }
 
 export interface GeminiLiveSessionOptions {
@@ -245,6 +283,11 @@ export interface GeminiLiveSessionOptions {
   learnerName?: string;
   memoryNote?: string;
   webSocketImpl?: any;
+  log?: SessionLogger;
+  maxReconnects?: number;
+  reconnectBaseMs?: number;
+  setupTimeoutMs?: number;
+  turnWatchdogMs?: number;
 }
 
 export interface ReviewRequestPayload {
@@ -270,15 +313,31 @@ export class GeminiLiveSession extends EventEmitter {
   learnerName: string;
   memoryNote: string;
   WebSocketImpl: any;
+  log: SessionLogger;
   gate: HalfDuplexGate;
   nudge: SilenceNudge;
   ws: any;
   closed: boolean;
-  reconnectAttempted: boolean;
+  maxReconnects: number;
+  reconnectBaseMs: number;
+  setupTimeoutMs: number;
+  turnWatchdogMs: number;
+  // Upstream reconnect attempts made so far, across every drop.
+  reconnects: number;
+  // Latest session-resumption handle from the upstream (a credential for
+  // the conversation: never logged).
+  resumeHandle: string | null;
   turn: Turn;
+  // Learner turns only (silent persona/say turns excluded); lifecycle logging.
+  turnsCompleted: number;
   private _thinkingTimer: NodeJS.Timeout | undefined;
   private _resumeTimer: NodeJS.Timeout | undefined;
   private _nudgeTimer: NodeJS.Timeout | undefined;
+  private _reconnectTimer: NodeJS.Timeout | undefined;
+  private _watchdogTimer: NodeJS.Timeout | undefined;
+  // True between setupComplete and the loss of the current upstream socket;
+  // nothing may be sent upstream outside that window.
+  private _upstreamReady: boolean;
   // Separate from gate._speaking (which starts pre-closed, see below) —
   // tracks whether we've told the client we're in the 'speaking' state
   // for the turn currently in flight.
@@ -300,6 +359,11 @@ export class GeminiLiveSession extends EventEmitter {
     learnerName = '',
     memoryNote = '',
     webSocketImpl = resolveWebSocketImpl(),
+    log = noopSessionLogger,
+    maxReconnects = MAX_RECONNECTS,
+    reconnectBaseMs = RECONNECT_BASE_MS,
+    setupTimeoutMs = SETUP_TIMEOUT_MS,
+    turnWatchdogMs = TURN_WATCHDOG_MS,
   }: GeminiLiveSessionOptions) {
     super();
     this.apiKey = apiKey;
@@ -312,6 +376,7 @@ export class GeminiLiveSession extends EventEmitter {
     this.learnerName = learnerName;
     this.memoryNote = memoryNote;
     this.WebSocketImpl = webSocketImpl;
+    this.log = log;
     this.gate = new HalfDuplexGate({ enabled: halfDuplex });
     this.nudge = new SilenceNudge();
     // The persona/greeting turn is sent as soon as setup completes, before
@@ -323,11 +388,20 @@ export class GeminiLiveSession extends EventEmitter {
     this.gate.onAssistantAudio();
     this.ws = null;
     this.closed = false;
-    this.reconnectAttempted = false;
+    this.maxReconnects = maxReconnects;
+    this.reconnectBaseMs = reconnectBaseMs;
+    this.setupTimeoutMs = setupTimeoutMs;
+    this.turnWatchdogMs = turnWatchdogMs;
+    this.reconnects = 0;
+    this.resumeHandle = null;
     this.turn = freshTurn();
+    this.turnsCompleted = 0;
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
+    this._reconnectTimer = undefined;
+    this._watchdogTimer = undefined;
+    this._upstreamReady = false;
     this._speakingUi = false;
     this._spokenScoreViolations = 0;
     this._stackedTurnViolations = 0;
@@ -350,12 +424,18 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    await this._connect();
+    await this._connect(null);
   }
 
-  private _connect(): Promise<void> {
+  // Opens one upstream socket and resolves once its setup completes. Given a
+  // resumption handle, the upstream restores the conversation it belongs to,
+  // so the persona turn is NOT sent again — resending it is what made the
+  // tutor greet the learner a second time with no memory of the talk (#16).
+  private _connect(resumeHandle: string | null): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      const connectStartedAt = Date.now();
+      let setupAt = 0;
       // `this.WebSocketImpl` is either the DOM/undici global WebSocket or the
       // `ws` package's WebSocket depending on the Node runtime (see
       // resolveWebSocketImpl above) — their type declarations disagree on the
@@ -367,9 +447,27 @@ export class GeminiLiveSession extends EventEmitter {
       // unreadable Blob and silently fails to parse.
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
+      this._upstreamReady = false;
+      // First outcome wins: setupComplete, error, close or the deadline.
+      const settle = (): boolean => {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(setupTimer);
+        return true;
+      };
+      const setupTimer = setTimeout(() => {
+        if (!settle()) return;
+        this.log('setup-timeout', { model: this.model, ms: this.setupTimeoutMs });
+        reject(new Error('upstream setup timed out'));
+        try {
+          ws.close();
+        } catch {
+          // already closed
+        }
+      }, this.setupTimeoutMs);
 
       ws.addEventListener('open', () => {
-        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice })));
+        ws.send(JSON.stringify(buildSetupFrame({ model: this.model, voice: this.voice, resumeHandle })));
       });
 
       ws.addEventListener('message', (event: any) => {
@@ -380,13 +478,21 @@ export class GeminiLiveSession extends EventEmitter {
         } catch {
           return;
         }
-        if (msg.setupComplete && !settled) {
-          settled = true;
-          this._sendPersonaTurn();
+        if (msg.setupComplete && settle()) {
+          setupAt = Date.now();
+          this._upstreamReady = true;
+          this.log('upstream-ready', { model: this.model, setupMs: setupAt - connectStartedAt, resumed: Boolean(resumeHandle) });
           this._emitClient({ type: 'ready' });
-          // No 'listening' state here: the persona turn is already in
-          // flight and will produce 'speaking' once its audio starts, then
-          // 'listening' once that greeting turn completes.
+          if (resumeHandle) {
+            // Nothing is in flight on a resumed session: hand the turn back
+            // to the learner.
+            this._reopenMic();
+          } else {
+            // No 'listening' state here: the persona turn is already in
+            // flight and will produce 'speaking' once its audio starts, then
+            // 'listening' once that greeting turn completes.
+            this._sendPersonaTurn();
+          }
           resolve();
           return;
         }
@@ -394,32 +500,81 @@ export class GeminiLiveSession extends EventEmitter {
       });
 
       ws.addEventListener('error', () => {
-        this._emitClient({ type: 'error', message: 'Upstream connection error' });
-        if (!settled) {
-          settled = true;
+        this.log('upstream-error', { model: this.model, afterSetup: Boolean(setupAt) });
+        if (settle()) {
           reject(new Error('upstream error'));
         }
       });
 
-      ws.addEventListener('close', () => {
-        const wasClosed = this.closed;
-        this._clearTimers();
-        if (!settled) {
-          settled = true;
-          reject(new Error('upstream closed before setup'));
+      ws.addEventListener('close', (event: any) => {
+        this.log('upstream-close', {
+          model: this.model,
+          code: event?.code,
+          reason: cleanReason(event?.reason),
+          byServer: this.closed,
+          afterSetup: Boolean(setupAt),
+          upMs: setupAt ? Date.now() - setupAt : null,
+        });
+        if (settle()) {
+          reject(new Error(`upstream closed before setup (code ${event?.code})`));
           return;
         }
-        if (!wasClosed && !this.reconnectAttempted) {
-          this.reconnectAttempted = true;
-          this._emitClient({ type: 'reconnecting' });
-          this._connect().catch(() => {
-            this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
-          });
-        } else if (!wasClosed) {
-          this._emitClient({ type: 'error', message: 'Lost connection to the tutor', code: 'upstream-closed' });
-        }
+        if (setupAt && !this.closed && ws === this.ws) this._onUpstreamLost();
       });
     });
+  }
+
+  // The upstream dropped mid-conversation (seen live: close 1011 after ~8
+  // minutes, no goAway first). Hold the mic, drop whatever the lost turn had
+  // queued for playback, and resume.
+  private _onUpstreamLost(): void {
+    this._upstreamReady = false;
+    this._clearTimers();
+    this.gate.hold();
+    this.turn = freshTurn();
+    this._speakingUi = false;
+    this._emitClient({ type: 'reconnecting' });
+    this._emitClient({ type: 'interrupted' });
+    void this._reconnect();
+  }
+
+  private async _reconnect(): Promise<void> {
+    for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS_PER_DROP; attempt++) {
+      if (this.reconnects >= this.maxReconnects) {
+        this._giveUp('reconnect-limit');
+        return;
+      }
+      const waitMs = reconnectDelayMs(attempt, this.reconnectBaseMs);
+      await new Promise((resolve) => {
+        this._reconnectTimer = setTimeout(resolve, waitMs);
+      });
+      if (this.closed) return;
+      this.reconnects += 1;
+      const startedAt = Date.now();
+      this.log('reconnecting', { attempt, total: this.reconnects, resume: Boolean(this.resumeHandle), waitMs });
+      try {
+        await this._connect(this.resumeHandle);
+        this.log('reconnected', { attempt, total: this.reconnects, ms: Date.now() - startedAt });
+        return;
+      } catch (err) {
+        if (this.closed) return;
+        this.log('reconnect-failed', { attempt, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    this._giveUp('reconnect-failed');
+  }
+
+  // The upstream is gone for good: stop, tell the client plainly, and let
+  // index.ts end the connection so its slot is freed (#17).
+  private _giveUp(reason: string): void {
+    this.log('gave-up', { reason, reconnects: this.reconnects });
+    this.stop();
+    this._emitClient({
+      type: 'error',
+      message: 'Lost connection to the tutor. Tap the microphone to start again.',
+      code: 'upstream-closed',
+    });
+    this.emit('ended', reason);
   }
 
   private _sendPersonaTurn(): void {
@@ -432,12 +587,28 @@ export class GeminiLiveSession extends EventEmitter {
       memoryNote: this.memoryNote,
     });
     this.turn.silent = true;
-    this._sendUpstream(textUpstreamFrame(prompt));
+    this._sendTurn(prompt);
   }
 
-  private _sendUpstream(frame: GeminiUpstreamFrame): void {
-    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) return;
+  // A text turn always gets a reply, so the reply's turnComplete is awaited
+  // under the watchdog.
+  private _sendTurn(text: string): void {
+    if (this._sendUpstream(textUpstreamFrame(text))) this._armTurnWatchdog();
+  }
+
+  private _armTurnWatchdog(): void {
+    clearTimeout(this._watchdogTimer);
+    const stillToPlayMs = Math.max(0, this.turn.playbackEndsAt - Date.now());
+    this._watchdogTimer = setTimeout(() => {
+      this.log('turn-watchdog', { ms: this.turnWatchdogMs });
+      this._onTurnComplete();
+    }, stillToPlayMs + this.turnWatchdogMs);
+  }
+
+  private _sendUpstream(frame: GeminiUpstreamFrame): boolean {
+    if (!this._upstreamReady || this.ws.readyState !== this.WebSocketImpl.OPEN) return false;
     this.ws.send(JSON.stringify(frame));
+    return true;
   }
 
   private _emitClient(message: LiveEventMessage): void {
@@ -448,9 +619,11 @@ export class GeminiLiveSession extends EventEmitter {
     clearTimeout(this._thinkingTimer);
     clearTimeout(this._resumeTimer);
     clearTimeout(this._nudgeTimer);
+    clearTimeout(this._watchdogTimer);
     this._thinkingTimer = undefined;
     this._resumeTimer = undefined;
     this._nudgeTimer = undefined;
+    this._watchdogTimer = undefined;
   }
 
   private _armThinkingTimer(): void {
@@ -467,20 +640,19 @@ export class GeminiLiveSession extends EventEmitter {
     // while gated). A raw frame proves nothing; only actual transcribed
     // speech (see the inputTranscription branch below) means the learner
     // spoke.
-    if (this.gate.isGated()) return false;
+    if (this.gate.isGated() || !this._sendUpstream(audioUpstreamFrame(base64Data))) return false;
     this._armThinkingTimer();
-    this._sendUpstream(audioUpstreamFrame(base64Data));
     return true;
   }
 
   sendText(text: string): void {
     this._disarmSilenceNudge();
-    this._sendUpstream(textUpstreamFrame(text));
+    this._sendTurn(text);
   }
 
   say(text: string): void {
     this.turn.silent = true;
-    this._sendUpstream(textUpstreamFrame(text));
+    this._sendTurn(text);
   }
 
   interrupt(): void {
@@ -519,6 +691,7 @@ export class GeminiLiveSession extends EventEmitter {
   stop(): void {
     this.closed = true;
     this._clearTimers();
+    clearTimeout(this._reconnectTimer);
     if (this.ws) {
       try {
         this.ws.close();
@@ -532,10 +705,18 @@ export class GeminiLiveSession extends EventEmitter {
     if (msg.serverContent) {
       this._handleServerContent(msg.serverContent);
     }
-    if (msg.goAway) {
-      this._emitClient({ type: 'going-away', timeLeft: msg.goAway.timeLeft });
+    if (msg.sessionResumptionUpdate) {
+      // resumable:false only means "not at this exact moment" (mid-turn);
+      // the previous handle stays valid.
+      const { newHandle, resumable } = msg.sessionResumptionUpdate;
+      if (newHandle && resumable !== false) this.resumeHandle = newHandle;
     }
-    // sessionResumptionUpdate intentionally ignored.
+    if (msg.goAway) {
+      this.log('going-away', { timeLeft: msg.goAway.timeLeft, resumable: Boolean(this.resumeHandle) });
+      // With a handle the coming close is resumed transparently, so there
+      // is nothing to warn the learner about.
+      if (!this.resumeHandle) this._emitClient({ type: 'going-away', timeLeft: msg.goAway.timeLeft });
+    }
   }
 
   private _handleServerContent(sc: GeminiServerContent): void {
@@ -549,6 +730,8 @@ export class GeminiLiveSession extends EventEmitter {
     for (const part of parts) {
       if (part.inlineData?.data) {
         gotAudio = true;
+        const playMs = (part.inlineData.data.length * 3) / 4 / OUTPUT_BYTES_PER_MS;
+        this.turn.playbackEndsAt = Math.max(this.turn.playbackEndsAt, Date.now()) + playMs;
         this._emitClient({ type: 'audio', data: part.inlineData.data });
       }
     }
@@ -560,6 +743,7 @@ export class GeminiLiveSession extends EventEmitter {
       }
       this.gate.onAssistantAudio();
     }
+    if (gotAudio || sc.outputTranscription?.text) this._armTurnWatchdog();
 
     if (sc.inputTranscription?.text) {
       this._disarmSilenceNudge();
@@ -580,7 +764,7 @@ export class GeminiLiveSession extends EventEmitter {
     const { userText, assistantText, startedAt, silent } = this.turn;
     const durationMs = Date.now() - startedAt;
     clearTimeout(this._thinkingTimer);
-    this.gate.onTurnComplete();
+    clearTimeout(this._watchdogTimer);
     this._speakingUi = false;
 
     this._emitClient({ type: 'input-text', text: userText, final: true });
@@ -599,6 +783,7 @@ export class GeminiLiveSession extends EventEmitter {
     }
 
     if (!silent) {
+      this.turnsCompleted += 1;
       this._emitClient({ type: 'turn-complete', user: userText, assistant: assistantText, durationMs });
       const payload: ReviewRequestPayload = {
         user: userText,
@@ -611,6 +796,13 @@ export class GeminiLiveSession extends EventEmitter {
     }
 
     this.turn = freshTurn();
+    this._reopenMic();
+  }
+
+  // Opens the mic gate after the tail guard, and tells the client then.
+  private _reopenMic(): void {
+    this.gate.onTurnComplete();
+    clearTimeout(this._resumeTimer);
     this._resumeTimer = setTimeout(() => {
       this._emitClient({ type: 'state', value: 'listening' });
     }, this.gate.tailGuardMs);

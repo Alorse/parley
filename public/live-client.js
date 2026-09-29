@@ -1,6 +1,7 @@
 // Thin WebSocket client for the /live protocol. Emits a
 // 'message' CustomEvent (detail = the parsed server message) and a 'close'
-// event; app.js does all of the interpretation.
+// event when the current socket is closed from the other side (not after
+// stop()); app.js does all of the interpretation.
 export class LiveClient extends EventTarget {
   constructor() {
     super();
@@ -31,7 +32,9 @@ export class LiveClient extends EventTarget {
         this.dispatchEvent(new CustomEvent('message', { detail: msg }));
       });
       ws.addEventListener('close', () => {
-        this.dispatchEvent(new CustomEvent('close'));
+        // Only the current socket's end matters: after stop() + a new
+        // connect(), the old socket's late close must not end the new one.
+        if (ws === this.ws) this.dispatchEvent(new CustomEvent('close'));
       });
     });
   }

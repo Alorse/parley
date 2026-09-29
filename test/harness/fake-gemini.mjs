@@ -61,6 +61,7 @@ function rms(base64) {
  * @param {boolean} [opts.neverCompleteSetup]
  * @param {boolean} [opts.omitTurnComplete] stream replies but never send turnComplete (seen once live)
  * @param {boolean} [opts.sendResumptionHandles] emit sessionResumptionUpdate like the real API does
+ * @param {boolean} [opts.rejectConnections] close every new connection at once (upstream down)
  * @param {number} [opts.vadThreshold]      RMS above which a mic frame counts as speech
  */
 export async function startFakeGemini(opts = {}) {
@@ -74,6 +75,7 @@ export async function startFakeGemini(opts = {}) {
     neverCompleteSetup: false,
     omitTurnComplete: false,
     sendResumptionHandles: true,
+    rejectConnections: false,
     vadThreshold: 0.02,
     ...opts,
   };
@@ -92,6 +94,7 @@ export async function startFakeGemini(opts = {}) {
       openedAt: Date.now(),
       closedAt: null,
       setup: null,
+      readyAt: null, // when setupComplete was sent
       textTurns: [],
       audioFrames: [], // { at, bytes, rms }
       replies: 0,
@@ -104,6 +107,10 @@ export async function startFakeGemini(opts = {}) {
       },
     };
     sessions.push(session);
+    if (o.rejectConnections) {
+      ws.close(1011, 'Service unavailable.');
+      return;
+    }
     const send = (obj) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
     };
@@ -137,6 +144,7 @@ export async function startFakeGemini(opts = {}) {
         session.setup = msg.setup;
         if (o.neverCompleteSetup) return;
         setTimeout(() => {
+          session.readyAt = Date.now();
           send({ setupComplete: {} });
           if (o.sendResumptionHandles) send({ sessionResumptionUpdate: { newHandle: `handle-${session.id}`, resumable: true } });
         }, o.setupDelayMs);

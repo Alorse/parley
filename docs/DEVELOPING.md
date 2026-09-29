@@ -36,6 +36,10 @@ finished turn into a structured review (score, corrections, words).
 | `ACCESS_TOKENS` | empty | optional comma-separated bearer tokens (unused if empty) |
 | `DATA_DIR` | `.data` | where the tiny JSON profile store lives |
 | `MAX_SESSIONS` | `4` | concurrent `/live` sessions before new ones get `{code:"busy"}` |
+| `PARLEY_MAX_RECONNECTS` | `8` | upstream reconnect attempts per `/live` session before it gives up |
+| `PARLEY_RECONNECT_BASE_MS` | `500` | first reconnect backoff; doubles per attempt after a drop (max 4 s, 3 attempts per drop) |
+| `PARLEY_SETUP_TIMEOUT_MS` | `15000` | an upstream setup that takes longer fails (next model / next attempt) |
+| `PARLEY_TURN_WATCHDOG_MS` | `10000` | how long past a reply's playback the server waits for `turnComplete` before completing the turn itself |
 
 `.env` is parsed by a ~20-line hand-rolled parser in `server/config.ts` — no
 `dotenv` dependency. It is git-ignored; never commit it.
@@ -50,6 +54,39 @@ in order — review, translate and hint all use the same chain — and
 `server/index.ts` does the equivalent for `GEMINI_LIVE_MODEL_FALLBACKS` when a
 `/live` session fails to complete upstream setup. The first model that works
 wins; the user only sees an error if the whole chain fails.
+
+## Session lifecycle records
+
+Every `/live` connection writes one-line JSON records to stdout (the service
+journal), all prefixed `live-session` and stamped with a short random `sid`:
+
+```bash
+journalctl -u parley | grep live-session             # everything
+journalctl -u parley | grep '"sid":"1a2b3c4d"'        # one conversation
+```
+
+Events: `open`, `busy`, `start`, `upstream-ready` (model, setup time),
+`upstream-error`, `upstream-close` (close code, reason, how long it was up),
+`reconnecting`, `going-away`, `gave-up`, `start-failed`, and `end` (duration,
+learner turns, reconnects, client close code). They carry lifecycle metadata
+only — never speech, transcripts, audio, the API key or resumption handles
+(`server/session-log.ts`).
+
+## Upstream drops
+
+The Live upstream closes without warning now and then (seen: close 1011 after
+about 8 minutes). Every setup asks for session resumption, and the server keeps
+the latest `sessionResumptionUpdate` handle. On a drop it tells the client
+`reconnecting` then `interrupted` (flush the lost turn's audio), holds the mic,
+and reconnects with the handle, so the conversation continues with its context
+and no second greeting; `ready` + `state: listening` follow once it is back.
+
+No wait is unbounded: setup has a deadline, and a reply whose `turnComplete`
+never arrives is completed by the server so the mic reopens. When the tutor
+can't be reached any more (reconnects exhausted, or no model completes setup)
+the server sends an `error`, frees the `MAX_SESSIONS` slot and closes the
+socket; the client turns the mic off and says the conversation ended. A second
+`start` on one socket is rejected with `{code:"already-started"}`.
 
 ## Node version
 

@@ -15,7 +15,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import { startFakeGemini, tagOfChunk } from './harness/fake-gemini.mjs';
 import { startParley } from './harness/server.mjs';
-import { GeminiLiveSession, buildSetupFrame } from '../server/live.js';
+import { GeminiLiveSession, buildSetupFrame, reconnectDelayMs } from '../server/live.js';
 import { buildSystemPrompt } from '../server/tutor.js';
 
 const PERSONA_PREFIX = 'You are Parley';
@@ -29,7 +29,7 @@ before(async () => {
     upstreamUrl: gem.url,
     // Names a fix is expected to honour so these scenarios stay fast; they
     // are ignored by the current server.
-    env: { PARLEY_SETUP_TIMEOUT_MS: '1000', PARLEY_TURN_WATCHDOG_MS: '1500', MAX_SESSIONS: '50' },
+    env: { PARLEY_SETUP_TIMEOUT_MS: '1000', PARLEY_TURN_WATCHDOG_MS: '1500', PARLEY_RECONNECT_BASE_MS: '100', MAX_SESSIONS: '50' },
   });
 });
 
@@ -46,6 +46,7 @@ function resetFake(overrides = {}) {
     setupDelayMs: 0,
     neverCompleteSetup: false,
     omitTurnComplete: false,
+    rejectConnections: false,
     ...overrides,
   });
 }
@@ -124,7 +125,7 @@ test('the persona prompt is sent once, and mic audio is held back until the gree
 
 // --- #13: upstream drop / reconnect ----------------------------------------
 
-test('#13 a dropped upstream resumes the same conversation instead of starting over', { todo: 'resume with the session handle; do not resend the persona prompt' }, async () => {
+test('#13 a dropped upstream resumes the same conversation instead of starting over', async () => {
   resetFake();
   const base = gem.sessions.length;
   const { ws, events } = await connect();
@@ -142,7 +143,14 @@ test('#13 a dropped upstream resumes the same conversation instead of starting o
   }
 });
 
-test('#13 mic audio is held back while a reconnect re-establishes the session', { todo: 're-close the mic gate before the reconnect' }, async () => {
+test('#16 every setup asks for resumption handles, so the first drop can be resumed too', () => {
+  const first = /** @type {any} */ (buildSetupFrame({ model: 'm', voice: 'Kore' })).setup;
+  assert.deepEqual(first.sessionResumption, {});
+  const resumed = /** @type {any} */ (buildSetupFrame({ model: 'm', voice: 'Kore', resumeHandle: 'h1' })).setup;
+  assert.deepEqual(resumed.sessionResumption, { handle: 'h1' });
+});
+
+test('#13 mic audio is held back while a reconnect re-establishes the session, then flows again', async () => {
   resetFake({ firstAudioDelayMs: 600 });
   const base = gem.sessions.length;
   const { ws, events } = await connect();
@@ -151,63 +159,105 @@ test('#13 mic audio is held back while a reconnect re-establishes the session', 
   const stop = streamMic(ws);
   await delay(200);
   newSessions(base)[0].drop();
-  await waitFor(() => (newSessions(base)[1]?.replyStarts.length ?? 0) > 0, 4000);
+  const resumedListening = () => {
+    const r = events.findIndex((e) => e.type === 'reconnecting');
+    return r !== -1 && events.some((e, i) => i > r && e.type === 'state' && e.value === 'listening');
+  };
+  assert.ok(await waitFor(resumedListening, 4000), 'the client is told the mic is open again');
+  await waitFor(() => (newSessions(base)[1]?.audioFrames.length ?? 0) > 0, 1000);
   stop();
   const second = newSessions(base)[1];
   try {
-    const firstReplyAudio = second.replyStarts[0];
-    const leaked = second.audioFrames.filter((f) => f.at < firstReplyAudio).length;
-    assert.equal(leaked, 0, `${leaked} mic frames reached the new session while its opening turn was still pending`);
+    const leaked = second.audioFrames.filter((f) => f.at < second.readyAt).length;
+    assert.equal(leaked, 0, `${leaked} mic frames reached the new session before its setup completed`);
+    assert.ok(second.audioFrames.length > 0, 'mic audio flows to the resumed session');
   } finally {
     ws.close();
   }
 });
 
-test('#13 when the upstream drops, the client is told to drop the queued audio of the lost turn', { todo: 'send an interrupted/flush before audio from the new upstream' }, async () => {
+test('#13 when the upstream drops, the client is told to drop the queued audio of the lost turn', async () => {
   resetFake({ replySeconds: 3 });
   const base = gem.sessions.length;
   const { ws, events } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));
   await waitFor(() => events.filter((e) => e.type === 'audio').length >= 2);
   newSessions(base)[0].drop();
+  // Once resumed, make the new upstream speak so the ordering is observable.
+  await waitFor(() => events.filter((e) => e.type === 'ready').length === 2, 3000);
+  ws.send(JSON.stringify({ type: 'text', text: 'Are you still there?' }));
   await waitFor(() => events.some((e) => e.type === 'audio' && e.tag === (newSessions(base)[1]?.id ?? -1) * 1000), 3000);
   try {
     const firstNewAudio = events.findIndex((e) => e.type === 'audio' && e.tag !== newSessions(base)[0].id * 1000);
     const reconnectIdx = events.findIndex((e) => e.type === 'reconnecting');
     const flushIdx = events.findIndex((e, i) => i > reconnectIdx && e.type === 'interrupted');
-    assert.ok(reconnectIdx !== -1 && flushIdx !== -1 && flushIdx < firstNewAudio, 'expected reconnecting -> interrupted -> new audio');
+    assert.ok(reconnectIdx !== -1 && flushIdx !== -1 && firstNewAudio !== -1 && flushIdx < firstNewAudio, 'expected reconnecting -> interrupted -> new audio');
   } finally {
     ws.close();
   }
 });
 
-test('#13 once the upstream is lost for good, the session ends cleanly and frees its slot', { todo: 'close the client socket (or recover) instead of leaving a zombie session' }, async () => {
+test('#16 repeated drops are each resumed with the latest handle, with one greeting and no error', async () => {
+  resetFake();
+  const base = gem.sessions.length;
+  const { ws, events } = await connect();
+  ws.send(JSON.stringify({ type: 'start' }));
+  await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
+  for (let n = 1; n <= 3; n++) {
+    newSessions(base)[n - 1].drop();
+    assert.ok(await waitFor(() => newSessions(base)[n]?.readyAt, 4000), `reconnect ${n} completed`);
+  }
+  await delay(100);
+  try {
+    const mine = newSessions(base);
+    for (let n = 1; n <= 3; n++) assert.equal(mine[n].setup.sessionResumption?.handle, `handle-${mine[n - 1].id}`);
+    const personas = mine.reduce((sum, s) => sum + s.textTurns.filter((t) => t.text.startsWith(PERSONA_PREFIX)).length, 0);
+    assert.equal(personas, 1, 'the persona prompt was sent exactly once');
+    assert.equal(events.filter((e) => e.type === 'error').length, 0);
+    assert.equal(ws.readyState, ws.OPEN);
+  } finally {
+    ws.close();
+  }
+});
+
+test('#13 once the upstream is lost for good, the session ends cleanly and frees its slot', async () => {
   resetFake();
   const base = gem.sessions.length;
   const { ws, events, closed } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));
   await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const stop = streamMic(ws);
   newSessions(base)[0].drop();
-  await waitFor(() => newSessions(base)[1]?.replies > 0);
+  await waitFor(() => newSessions(base)[1]?.readyAt);
   const before = (await health()).activeSessions;
+  gem.options.rejectConnections = true;
   newSessions(base)[1].drop();
-  const ended = await Promise.race([closed.then(() => true), delay(2000).then(() => false)]);
+  const ended = await Promise.race([closed.then(() => true), delay(3000).then(() => false)]);
+  stop();
+  gem.options.rejectConnections = false;
   const afterCount = (await health()).activeSessions;
   ws.close();
-  assert.ok(ended, 'client socket should be closed (today it stays open, the mic keeps streaming into nothing)');
+  assert.ok(ended, 'client socket should be closed so the client stops its mic');
+  const error = events.find((e) => e.type === 'error');
+  assert.equal(error?.code, 'upstream-closed', 'the client is told why');
   assert.equal(afterCount, before - 1, 'the dead session must stop counting against MAX_SESSIONS');
 });
 
-test('#13 an upstream that never completes setup fails the session with an error instead of hanging', { todo: 'add a setup timeout (PARLEY_SETUP_TIMEOUT_MS here)' }, async () => {
+test('#13 an upstream that never completes setup fails the session with an error instead of hanging', async () => {
   resetFake({ neverCompleteSetup: true });
-  const { ws, events } = await connect();
+  const base = gem.sessions.length;
+  const { ws, events, closed } = await connect();
   ws.send(JSON.stringify({ type: 'start' }));
-  const gotError = await waitFor(() => events.some((e) => e.type === 'error'), 2500);
+  // PARLEY_SETUP_TIMEOUT_MS=1000 per live model, and there are two models.
+  const gotError = await waitFor(() => events.some((e) => e.type === 'error'), 3000);
+  const ended = await Promise.race([closed.then(() => true), delay(1000).then(() => false)]);
   ws.close();
-  assert.ok(gotError, 'client heard nothing at all for 2.5 s');
+  assert.ok(gotError, 'client heard nothing at all');
+  assert.ok(ended, 'the failed session is closed, not left open');
+  assert.equal(newSessions(base).filter((s) => s.closedAt === null).length, 0, 'no upstream left waiting');
 });
 
-test('#13 the mic re-opens even if a turn never reports turnComplete', { todo: 'add a turn watchdog (PARLEY_TURN_WATCHDOG_MS here)' }, async () => {
+test('#13 the mic re-opens even if a turn never reports turnComplete', async () => {
   resetFake({ omitTurnComplete: true, replySeconds: 0.32 });
   const base = gem.sessions.length;
   const { ws } = await connect();
@@ -219,7 +269,7 @@ test('#13 the mic re-opens even if a turn never reports turnComplete', { todo: '
   assert.ok(reached, 'the mic stayed gated forever because the greeting turn never completed');
 });
 
-test('#13 a client that leaves while the upstream is still being set up does not leak the upstream session', { todo: 'stop the pending candidate when the client socket closes' }, async () => {
+test('#13 a client that leaves while the upstream is still being set up does not leak the upstream session', async () => {
   resetFake({ setupDelayMs: 400 });
   const base = gem.sessions.length;
   const { ws } = await connect();
@@ -231,7 +281,7 @@ test('#13 a client that leaves while the upstream is still being set up does not
   assert.equal(open, 0, `${open} upstream session(s) left open (and greeting nobody) after the client left`);
 });
 
-test('#13 a second start on the same socket does not open a second upstream session', { todo: 'ignore or reject a repeated start' }, async () => {
+test('#13 a second start on the same socket does not open a second upstream session', async () => {
   resetFake();
   const base = gem.sessions.length;
   const { ws, events } = await connect();
@@ -243,6 +293,95 @@ test('#13 a second start on the same socket does not open a second upstream sess
   ws.close();
   assert.equal(newSessions(base).length, 1, 'two upstream sessions');
   assert.equal(tags.size, 1, 'two voices interleaved into one client');
+  assert.equal(events.find((e) => e.type === 'error')?.code, 'already-started');
+});
+
+test('#17 the turn watchdog waits for a burst-sent reply to finish playing before stepping in', async () => {
+  // gemini-3.8-live sends the audio in a burst and holds turnComplete until
+  // playback would end: 3 s of audio here, twice the 1.5 s watchdog.
+  resetFake({ burst: true, replySeconds: 3 });
+  const { ws, events } = await connect();
+  ws.send(JSON.stringify({ type: 'start' }));
+  await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'), 6000);
+  ws.close();
+  const finals = events.filter((e) => e.type === 'output-text' && e.final);
+  assert.equal(finals.length, 1);
+  assert.match(finals[0].text, /^Reply 1/, 'the real turnComplete (with its transcript) ended the turn, not the watchdog');
+});
+
+test('#16 reconnect backoff doubles per attempt and is capped', () => {
+  assert.deepEqual([1, 2, 3].map((n) => reconnectDelayMs(n, 500)), [500, 1000, 2000]);
+  assert.equal(reconnectDelayMs(10, 500), 4000);
+});
+
+test('#16 reconnects stop at the configured limit and the client is told the tutor is gone', async () => {
+  resetFake();
+  const base = gem.sessions.length;
+  class ToFake extends WebSocket {
+    constructor() {
+      super(gem.url);
+    }
+  }
+  const session = new GeminiLiveSession({ apiKey: 'k', model: 'm', voice: 'Kore', webSocketImpl: ToFake, maxReconnects: 1, reconnectBaseMs: 10 });
+  const out = [];
+  session.on('client', (m) => out.push(m));
+  await session.start();
+  try {
+    newSessions(base)[0].drop();
+    assert.ok(await waitFor(() => newSessions(base)[1]?.readyAt), 'first drop is resumed');
+    await delay(20);
+    newSessions(base)[1].drop();
+    assert.ok(await waitFor(() => out.some((m) => m.type === 'error' && m.code === 'upstream-closed')), 'gave up after the limit');
+    await delay(100);
+    assert.equal(newSessions(base).length, 2, 'no reconnect beyond the limit');
+  } finally {
+    session.stop();
+  }
+});
+
+// --- #21: lifecycle records in the journal -----------------------------------
+
+function lifecycleRecords() {
+  return srv.logs
+    .join('')
+    .split('\n')
+    .filter((l) => l.startsWith('live-session '))
+    .map((l) => JSON.parse(l.slice('live-session '.length)));
+}
+
+test('#21 a session writes lifecycle records (open, ready, upstream drop, end) and nothing sensitive', async () => {
+  resetFake();
+  const base = gem.sessions.length;
+  const { ws, events, closed } = await connect();
+  ws.send(JSON.stringify({ type: 'start' }));
+  await waitFor(() => events.some((e) => e.type === 'state' && e.value === 'listening'));
+  const stop = streamMic(ws);
+  await delay(100);
+  newSessions(base)[0].drop(1011, 'Internal error encountered (#21).');
+  await waitFor(() => newSessions(base)[1]?.readyAt, 3000);
+  await delay(50);
+  stop();
+  ws.close();
+  await closed;
+  // Other tests drop upstreams too; this one's close reason is unique.
+  const mine = () => {
+    const all = lifecycleRecords();
+    const sid = all.find((r) => r.event === 'upstream-close' && r.reason === 'Internal error encountered (#21).')?.sid;
+    return all.filter((r) => r.sid === sid);
+  };
+  assert.ok(await waitFor(() => mine().some((r) => r.event === 'end')), 'end record written');
+  const kinds = mine().map((r) => r.event);
+  for (const e of ['open', 'start', 'upstream-ready', 'upstream-close', 'reconnecting', 'reconnected', 'end']) assert.ok(kinds.includes(e), `missing ${e} in ${kinds}`);
+  const drop = mine().find((r) => r.event === 'upstream-close');
+  assert.equal(drop.code, 1011);
+  assert.equal(typeof drop.upMs, 'number');
+  const end = mine().find((r) => r.event === 'end');
+  assert.equal(typeof end.durationMs, 'number');
+  assert.ok(end.reconnects >= 1);
+  const text = srv.logs.join('');
+  assert.ok(!text.includes('harness-fake-key'), 'the API key must never be logged');
+  assert.ok(!text.includes(LOUD_FRAME.slice(0, 64)), 'audio must never be logged');
+  assert.ok(!text.includes(PERSONA_PREFIX), 'the persona prompt must never be logged');
 });
 
 // --- UX: the 'thinking' state ------------------------------------------------

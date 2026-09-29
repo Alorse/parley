@@ -74,3 +74,24 @@ test('buildConfig falls back to defaults when the fallback env vars are empty', 
 test('buildConfig throws without an API key', () => {
   assert.throws(() => buildConfig({}), /GOOGLE_API_KEY/);
 });
+
+test('buildConfig reads the live reconnect limit and backoff, ignoring junk', () => {
+  const defaults = buildConfig({ GOOGLE_API_KEY: 'k' });
+  assert.equal(defaults.liveMaxReconnects, 8);
+  assert.equal(defaults.liveReconnectBaseMs, 500);
+  const set = buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_MAX_RECONNECTS: '0', PARLEY_RECONNECT_BASE_MS: '50' });
+  assert.equal(set.liveMaxReconnects, 0);
+  assert.equal(set.liveReconnectBaseMs, 50);
+  const junk = buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_MAX_RECONNECTS: 'lots', PARLEY_RECONNECT_BASE_MS: '-1' });
+  assert.equal(junk.liveMaxReconnects, 8);
+  assert.equal(junk.liveReconnectBaseMs, 500);
+});
+
+test('buildConfig reads the live setup timeout and turn watchdog', () => {
+  const defaults = buildConfig({ GOOGLE_API_KEY: 'k' });
+  assert.equal(defaults.liveSetupTimeoutMs, 15000);
+  assert.equal(defaults.liveTurnWatchdogMs, 10000);
+  const set = buildConfig({ GOOGLE_API_KEY: 'k', PARLEY_SETUP_TIMEOUT_MS: '1000', PARLEY_TURN_WATCHDOG_MS: '1500' });
+  assert.equal(set.liveSetupTimeoutMs, 1000);
+  assert.equal(set.liveTurnWatchdogMs, 1500);
+});

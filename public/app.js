@@ -46,6 +46,7 @@ const STATUS_TEXT = {
   listening: 'Listening…',
   thinking: 'Thinking…',
   speaking: 'Parley is speaking',
+  reconnecting: 'Reconnecting…',
 };
 
 function escapeHtml(str) {
@@ -172,6 +173,14 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 
 function updateStatusLine() {
   el('status-line').textContent = STATUS_TEXT[state.uiState] || STATUS_TEXT.idle;
+}
+
+/** @param {string} value one of the STATUS_TEXT keys */
+function setUiState(value) {
+  state.uiState = value;
+  updateStatusLine();
+  orb.setState(value === 'reconnecting' ? 'thinking' : value);
+  updateWaveformVisibility();
 }
 
 function renderTopicChip() {
@@ -418,10 +427,7 @@ liveClient.addEventListener('message', (event) => {
       if (msg.value === 'speaking' && state.uiState !== 'speaking') {
         el('tutor-translation').classList.add('hidden');
       }
-      state.uiState = msg.value;
-      updateStatusLine();
-      orb.setState(msg.value);
-      updateWaveformVisibility();
+      setUiState(msg.value);
       if (msg.value === 'listening' && state.pendingEndConversation) {
         state.pendingEndConversation = false;
         endSession();
@@ -453,7 +459,10 @@ liveClient.addEventListener('message', (event) => {
       handleReview(msg);
       break;
     case 'reconnecting':
+      // The server holds the mic and resumes the same conversation; the
+      // 'interrupted' that follows drops the lost turn's queued audio.
       showError('Reconnecting to the tutor…');
+      setUiState('reconnecting');
       break;
     case 'going-away':
       showError('This session will end soon — feel free to wrap up.');
@@ -466,15 +475,28 @@ liveClient.addEventListener('message', (event) => {
   }
 });
 
-liveClient.addEventListener('close', () => {
+// Everything a finished session releases, however it ended.
+function teardownSession() {
   finalizeConversationMemory();
   state.pendingEndConversation = false;
   releaseWakeLock();
-  if (state.sessionStarted) {
-    state.sessionStarted = false;
-    state.micOn = false;
-    updateMicUI();
-    updateEndButtonState();
+  audioCapture.stop();
+  audioPlayer.flush();
+  state.sessionStarted = false;
+  state.micOn = false;
+  setUiState('idle');
+  updateMicUI();
+  updateEndButtonState();
+}
+
+// Ended from the other side (tutor unreachable, server restart, network):
+// turn the mic off for real and say so, so it never looks like it is still
+// listening (#17).
+liveClient.addEventListener('close', () => {
+  if (!state.sessionStarted) return;
+  teardownSession();
+  if (el('error-card').classList.contains('hidden')) {
+    showError('The conversation ended. Tap the microphone to start again.');
   }
 });
 
@@ -513,20 +535,11 @@ el('mic-btn').addEventListener('click', async () => {
 // goodbye pair (see handleReview/the 'state' case above) — one way to end a
 // session, not two.
 function endSession() {
-  // finalizeConversationMemory() and releaseWakeLock() are not called here:
-  // liveClient.stop() closes the socket, which fires the 'close' listener
-  // below — the single place a session's end is actually detected, whatever
-  // caused it.
+  // liveClient.stop() detaches the socket, so its close is not reported to
+  // the 'close' listener (a new session may already be starting by then):
+  // tear down here.
   liveClient.stop();
-  audioCapture.stop();
-  audioPlayer.flush();
-  state.sessionStarted = false;
-  state.micOn = false;
-  state.uiState = 'idle';
-  updateMicUI();
-  updateEndButtonState();
-  updateStatusLine();
-  orb.setState('idle');
+  teardownSession();
   resetTranscript();
 }
 
@@ -795,7 +808,7 @@ showScreen('talk');
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=8').catch(() => {
+    navigator.serviceWorker.register('/sw.js?v=9').catch(() => {
       // offline shell just won't be available — the app still works online
     });
   });
