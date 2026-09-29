@@ -54,6 +54,8 @@ function rms(base64) {
  * @param {number} [opts.replySeconds]      length of every spoken reply
  * @param {number} [opts.chunkBytes]        PCM bytes per audio message (15360 = 320 ms, the median measured live)
  * @param {number} [opts.pace]              1 = real time, 0 = as fast as possible
+ * @param {boolean} [opts.burst]            send all audio at once, then hold turnComplete until
+ *                                          real-time playback would end (what gemini-3.8-live does)
  * @param {number} [opts.firstAudioDelayMs] think time before the first audio chunk (~700 ms measured live)
  * @param {number} [opts.setupDelayMs]      delay before setupComplete
  * @param {boolean} [opts.neverCompleteSetup]
@@ -66,6 +68,7 @@ export async function startFakeGemini(opts = {}) {
     replySeconds: 2,
     chunkBytes: 15360,
     pace: 1,
+    burst: false,
     firstAudioDelayMs: 0,
     setupDelayMs: 0,
     neverCompleteSetup: false,
@@ -115,8 +118,9 @@ export async function startFakeGemini(opts = {}) {
         const bytes = Math.min(o.chunkBytes, totalBytes - sent);
         if (sent === 0) session.replyStarts.push(Date.now());
         send({ serverContent: { modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: pcmChunk(bytes, sessionTag(session.id)) } }] } } });
-        if (o.pace > 0) await new Promise((r) => setTimeout(r, chunkSeconds * 1000 * o.pace));
+        if (o.pace > 0 && !o.burst) await new Promise((r) => setTimeout(r, chunkSeconds * 1000 * o.pace));
       }
+      if (o.burst) await new Promise((r) => setTimeout(r, (totalBytes / OUTPUT_BYTES_PER_SECOND) * 1000));
       send({ serverContent: { outputTranscription: { text } } });
       if (!o.omitTurnComplete) send({ serverContent: { turnComplete: true } });
       session.speaking = false;
